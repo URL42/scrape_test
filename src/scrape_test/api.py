@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -12,6 +13,16 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .brief import (
+    MODEL,
+    BriefUnavailable,
+    build_payload,
+    credentials_available,
+    generate_brief,
+    load_brief,
+    payload_hash,
+    store_brief,
+)
 from .config import WEB_DIR
 from .db import get_meta, init_db, session
 from .http import make_client
@@ -19,8 +30,8 @@ from .news import SOURCES, get_source
 from .scoring import RULES_VERSION, WEIGHTS, compute_score
 from .scoring.score import rescore_all, store_score
 from .yc.directory import company_dict, refresh_directory, resolve
-from .yc.fingerprint import get_fingerprint
-from .yc.jobs import get_jobs, stack_from_jobs
+from .yc.fingerprint import get_fingerprint, load_fingerprint
+from .yc.jobs import get_jobs, load_jobs, stack_from_jobs
 
 log = logging.getLogger(__name__)
 _client: httpx.AsyncClient | None = None
@@ -101,6 +112,57 @@ async def _yc_block(company: str, refresh: bool) -> dict[str, Any]:
         }
 
 
+@app.post("/api/brief")
+async def brief(
+    company: str = Query(..., min_length=1),
+    context: str = Query(""),
+    source: str = Query("google_news"),
+    regenerate: bool = Query(False),
+) -> JSONResponse:
+    """Generate the 'so what' brief for one company.
+
+    On demand only - each generation costs money, so it never rides along with a lookup.
+    Cached against a hash of its own inputs; only `regenerate` forces a new call.
+    """
+    with session() as conn:
+        row, suggestions = resolve(conn, company)
+        if row is None:
+            raise HTTPException(404, f"{company!r} is not in the YC directory.")
+        c = company_dict(row)
+
+        jobs = load_jobs(conn, c["id"])
+        fp = load_fingerprint(conn, c["id"]) or {}
+        score = compute_score(c, jobs, fp).as_dict()
+
+    news = await _news_block(company, context, source, limit=12)
+    payload = build_payload(c, jobs, stack_from_jobs(jobs), fp, score, news["articles"])
+    digest = payload_hash(payload)
+
+    if not regenerate:
+        with session() as conn:
+            cached = load_brief(conn, c["id"], digest)
+        if cached:
+            return JSONResponse({"company": c["name"], **cached})
+
+    try:
+        result = await generate_brief(payload)
+    except BriefUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+    with session() as conn:
+        store_brief(conn, c["id"], digest, result)
+
+    return JSONResponse(
+        {
+            "company": c["name"],
+            "brief": result.model_dump(),
+            "model": MODEL,
+            "created_at": time.time(),
+            "cached": False,
+        }
+    )
+
+
 @app.get("/api/sources")
 async def sources() -> dict[str, Any]:
     with session() as conn:
@@ -113,6 +175,7 @@ async def sources() -> dict[str, Any]:
         "directory": {"companies": count, "fetched_at": fetched},
         "rules_version": RULES_VERSION,
         "weights": WEIGHTS,
+        "brief": {"available": credentials_available(), "model": MODEL},
     }
 
 

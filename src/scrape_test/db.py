@@ -77,6 +77,14 @@ CREATE TABLE IF NOT EXISTS scores (
     computed_at     REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS briefs (
+    company_id      INTEGER PRIMARY KEY REFERENCES companies(id),
+    input_hash      TEXT NOT NULL,
+    model           TEXT NOT NULL,
+    payload         TEXT NOT NULL,
+    created_at      REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key             TEXT PRIMARY KEY,
     value           TEXT NOT NULL,

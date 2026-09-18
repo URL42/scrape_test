@@ -7,8 +7,17 @@ import asyncio
 import json
 import sys
 
+from .brief import (
+    BriefUnavailable,
+    build_payload,
+    generate_brief,
+    load_brief,
+    payload_hash,
+    store_brief,
+)
 from .db import init_db, session
 from .http import make_client
+from .news import get_source
 from .scoring import RULES_VERSION, compute_score
 from .scoring.score import rescore_all, store_score
 from .yc.directory import company_dict, refresh_directory, resolve
@@ -92,6 +101,75 @@ def _cmd_rescore(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _cmd_brief(args: argparse.Namespace) -> int:
+    """Generate the 'so what' brief for one company. Costs a real API call."""
+    init_db()
+    async with make_client() as client:
+        with session() as conn:
+            await refresh_directory(conn, client)
+            row, suggestions = resolve(conn, args.company)
+            if row is None:
+                print(f"{args.company!r} not found in the YC directory.")
+                if suggestions:
+                    print("did you mean:", ", ".join(suggestions))
+                return 1
+            c = company_dict(row)
+            jobs, _ = await get_jobs(conn, client, c["id"], c["slug"])
+            fp, _ = await get_fingerprint(conn, client, c["id"], c["website"])
+            score = compute_score(c, jobs, fp).as_dict()
+
+        try:
+            articles = await get_source(args.source).search(
+                client, args.company, args.context, limit=12
+            )
+        except Exception as exc:  # noqa: BLE001 - news is optional context for the brief
+            print(f"(news unavailable: {exc})")
+            articles = []
+
+    payload = build_payload(
+        c, jobs, stack_from_jobs(jobs), fp, score, [a.as_dict() for a in articles]
+    )
+    digest = payload_hash(payload)
+
+    with session() as conn:
+        cached = None if args.regenerate else load_brief(conn, c["id"], digest)
+    if cached:
+        b = cached["brief"]
+        print("(cached - pass --regenerate to spend a new call)\n")
+    else:
+        try:
+            result = await generate_brief(payload)
+        except BriefUnavailable as exc:
+            print(f"Brief unavailable: {exc}")
+            return 1
+        with session() as conn:
+            store_brief(conn, c["id"], digest, result)
+        b = result.model_dump()
+
+    print(f"{c['name']}  -  {b['priority'].upper()}")
+    print(f"\n{b['headline']}\n")
+    print(f"NEWS\n  {b['news_summary']}\n")
+    print(f"READ\n  {b['interpretation']}\n")
+    print(f"ACTION\n  {b['recommended_action']}\n")
+    if b.get("news_hook"):
+        print(f"HOOK\n  {b['news_hook']}\n")
+    for label, key in (
+        ("TALKING POINTS", "talking_points"),
+        ("RISKS", "risks"),
+        ("EVIDENCE GAPS", "evidence_gaps"),
+    ):
+        if b.get(key):
+            print(label)
+            for item in b[key]:
+                print(f"  - {item}")
+            print()
+    print("DRAFT EMAIL (review before sending)")
+    print(f"  Subject: {b['email_subject']}\n")
+    for line in b["email_body"].splitlines():
+        print(f"  {line}")
+    return 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -115,6 +193,13 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("rescore", help="recompute cached scores after editing weights")
     p.set_defaults(fn=_cmd_rescore, is_async=False)
+
+    p = sub.add_parser("brief", help="LLM 'so what' brief + draft outreach email")
+    p.add_argument("company")
+    p.add_argument("--context", default="", help="free-text context to refine the news query")
+    p.add_argument("--source", default="google_news", help="news backend")
+    p.add_argument("--regenerate", action="store_true", help="bypass the cached brief")
+    p.set_defaults(fn=_cmd_brief, is_async=True)
 
     p = sub.add_parser("serve", help="run the web UI")
     p.add_argument("--host", default="127.0.0.1")

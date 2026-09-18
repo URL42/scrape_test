@@ -18,6 +18,8 @@ function safeUrl(raw) {
 }
 
 let jobsData = [];
+let currentCompany = null;
+let briefAvailable = false;
 let sortState = { key: "pretty_role", dir: 1 };
 
 async function loadSources() {
@@ -31,7 +33,10 @@ async function loadSources() {
     const when = d.directory.fetched_at
       ? new Date(d.directory.fetched_at * 1000).toLocaleString()
       : "never";
-    $("dirmeta").textContent = `${n.toLocaleString()} YC companies · refreshed ${when} · rules ${d.rules_version}`;
+    briefAvailable = !!(d.brief && d.brief.available);
+    const briefNote = briefAvailable ? `brief: ${d.brief.model}` : "brief: no API key";
+    $("dirmeta").textContent =
+      `${n.toLocaleString()} YC companies · refreshed ${when} · rules ${d.rules_version} · ${briefNote}`;
   } catch {
     $("dirmeta").textContent = "could not reach the API";
   }
@@ -195,6 +200,7 @@ function renderYC(yc) {
         `<span class="chip ${i.confidence}" title="${esc(i.evidence)}">${esc(i.product)}</span>`).join("")}</div>
     </div>`).join("");
 
+  currentCompany = c.name;
   jobsData = yc.jobs.slice();
   sortJobs();
 
@@ -231,8 +237,107 @@ function renderYC(yc) {
 
     <h4 class="section">Open roles</h4>
     <div id="jobswrap">${jobsTable()}</div>
+
+    <div class="briefzone">
+      <h4 class="section" style="margin-top:22px">So what?</h4>
+      <p class="notice" id="briefnote">
+        ${briefAvailable
+          ? "Interprets everything above and drafts outreach. Costs one API call; the result is cached."
+          : "Needs an Anthropic API key. Set ANTHROPIC_API_KEY and restart the server."}
+      </p>
+      <button type="button" id="briefbtn" ${briefAvailable ? "" : "disabled"}>Generate brief</button>
+      <button type="button" id="briefregen" class="secondary" hidden>Regenerate</button>
+      <div id="briefout"></div>
+    </div>
   `;
   bindSort();
+  bindBrief();
+}
+
+function list(title, items) {
+  if (!items || !items.length) return "";
+  return `<h5 class="briefh">${esc(title)}</h5><ul class="brieflist">` +
+    items.map((i) => `<li>${esc(i)}</li>`).join("") + `</ul>`;
+}
+
+function renderBrief(data) {
+  const b = data.brief;
+  const when = data.created_at ? new Date(data.created_at * 1000).toLocaleString() : "";
+  $("briefout").innerHTML = `
+    <div class="brief">
+      <div class="briefhead">
+        <span class="prio ${esc(b.priority.replace(/\s+/g, "-"))}">${esc(b.priority)}</span>
+        <span class="briefmeta">${esc(data.model || "")}${data.cached ? " · cached" : ""}${when ? " · " + esc(when) : ""}</span>
+      </div>
+      <p class="headline">${esc(b.headline)}</p>
+
+      <h5 class="briefh">News summary</h5>
+      <p>${esc(b.news_summary)}</p>
+
+      <h5 class="briefh">What the data says</h5>
+      <p>${esc(b.interpretation)}</p>
+
+      <h5 class="briefh">Recommended action</h5>
+      <p>${esc(b.recommended_action)}</p>
+
+      ${b.news_hook ? `<h5 class="briefh">Outreach hook</h5><p>${esc(b.news_hook)}</p>` : ""}
+      ${list("Talking points", b.talking_points)}
+      ${list("Risks", b.risks)}
+      ${list("Evidence gaps", b.evidence_gaps)}
+
+      <h5 class="briefh">Draft email <span class="draftwarn">review before sending</span></h5>
+      <div class="email">
+        <div class="emailsubj">Subject: ${esc(b.email_subject)}</div>
+        <pre id="emailbody">${esc(b.email_body)}</pre>
+        <button type="button" id="copyemail" class="secondary">Copy email</button>
+      </div>
+    </div>`;
+  $("briefregen").hidden = false;
+  const copy = $("copyemail");
+  if (copy) {
+    copy.addEventListener("click", async () => {
+      const text = `Subject: ${b.email_subject}\n\n${b.email_body}`;
+      try {
+        await navigator.clipboard.writeText(text);
+        copy.textContent = "Copied";
+        setTimeout(() => { copy.textContent = "Copy email"; }, 1500);
+      } catch {
+        copy.textContent = "Copy failed - select manually";
+      }
+    });
+  }
+}
+
+async function fetchBrief(regenerate) {
+  if (!currentCompany) return;
+  const btn = regenerate ? $("briefregen") : $("briefbtn");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = regenerate ? "Regenerating…" : "Thinking…";
+  $("briefout").innerHTML = `<p class="empty">Reading the data and drafting…</p>`;
+  const params = new URLSearchParams({
+    company: currentCompany,
+    context: $("context").value.trim(),
+    source: $("source").value,
+    regenerate: regenerate ? "true" : "false",
+  });
+  try {
+    const r = await fetch(`/api/brief?${params}`, { method: "POST" });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || `API returned ${r.status}`);
+    renderBrief(d);
+  } catch (err) {
+    $("briefout").innerHTML = `<p class="empty">${esc(err.message || err)}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+function bindBrief() {
+  const b = $("briefbtn"), r = $("briefregen");
+  if (b) b.addEventListener("click", () => fetchBrief(false));
+  if (r) r.addEventListener("click", () => fetchBrief(true));
 }
 
 $("searchform").addEventListener("submit", async (e) => {
