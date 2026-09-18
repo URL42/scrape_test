@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prospect Scope</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="dot"></span>
+    <h1>Prospect Scope</h1>
+  </div>
+  <div class="meta" id="dirmeta">loading directory…</div>
+</header>
+
+<form id="searchform" class="search">
+  <div class="field grow">
+    <label for="company">Company</label>
+    <input id="company" name="company" placeholder="Stripe" autocomplete="off" required>
+  </div>
+  <div class="field grow2">
+    <label for="context">Context <span class="hint">refines the news query</span></label>
+    <input id="context" name="context" placeholder="funding, fintech infrastructure" autocomplete="off">
+  </div>
+  <div class="field">
+    <label for="source">News source</label>
+    <select id="source" name="source"></select>
+  </div>
+  <div class="field checkbox">
+    <label><input type="checkbox" id="refresh"> Bypass cache</label>
+  </div>
+  <button type="submit" id="go">Search</button>
+</form>
+
+<div id="status" class="status" hidden></div>
+
+<main class="grid">
+  <section class="panel" id="ycpanel">
+    <h2>Y Combinator <span class="sub">tech stack &amp; hiring signals</span></h2>
+    <div id="yc" class="panel-body"><p class="empty">Search a company to begin.</p></div>
+  </section>
+
+  <section class="panel" id="newspanel">
+    <h2>Current events <span class="sub" id="newssub"></span></h2>
+    <div id="news" class="panel-body"><p class="empty">No search yet.</p></div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

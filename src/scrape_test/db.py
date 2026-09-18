@@ -1,0 +1,143 @@
+"""SQLite storage. One file, no ORM - the schema is small enough to read in one sitting."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any
+
+from .config import DB_PATH, ensure_dirs
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS companies (
+    id              INTEGER PRIMARY KEY,
+    slug            TEXT NOT NULL UNIQUE,
+    name            TEXT NOT NULL,
+    norm_name       TEXT NOT NULL,
+    former_names    TEXT NOT NULL DEFAULT '[]',
+    website         TEXT,
+    batch           TEXT,
+    status          TEXT,
+    team_size       INTEGER,
+    is_hiring       INTEGER NOT NULL DEFAULT 0,
+    industry        TEXT,
+    subindustry     TEXT,
+    tags            TEXT NOT NULL DEFAULT '[]',
+    one_liner       TEXT,
+    long_description TEXT,
+    all_locations   TEXT,
+    year_founded    INTEGER,
+    launched_at     INTEGER,
+    top_company     INTEGER NOT NULL DEFAULT 0,
+    fetched_at      REAL NOT NULL,
+    jobs_fetched_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_companies_norm ON companies(norm_name);
+CREATE INDEX IF NOT EXISTS idx_companies_hiring ON companies(is_hiring);
+
+CREATE TABLE IF NOT EXISTS job_postings (
+    yc_job_id       INTEGER PRIMARY KEY,
+    company_id      INTEGER NOT NULL REFERENCES companies(id),
+    title           TEXT,
+    role            TEXT,
+    pretty_role     TEXT,
+    skills          TEXT NOT NULL DEFAULT '[]',
+    salary_range    TEXT,
+    equity_range    TEXT,
+    min_experience  TEXT,
+    location        TEXT,
+    job_type        TEXT,
+    visa            TEXT,
+    url             TEXT,
+    created_at_rel  TEXT,
+    last_active_rel TEXT,
+    fetched_at      REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_company ON job_postings(company_id);
+
+CREATE TABLE IF NOT EXISTS site_tech (
+    company_id      INTEGER PRIMARY KEY REFERENCES companies(id),
+    url             TEXT,
+    final_url       TEXT,
+    status_code     INTEGER,
+    detected        TEXT NOT NULL DEFAULT '{}',
+    error           TEXT,
+    fetched_at      REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS scores (
+    company_id      INTEGER PRIMARY KEY REFERENCES companies(id),
+    total           REAL NOT NULL,
+    confidence      TEXT NOT NULL,
+    breakdown       TEXT NOT NULL DEFAULT '[]',
+    rules_version   TEXT NOT NULL,
+    computed_at     REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key             TEXT PRIMARY KEY,
+    value           TEXT NOT NULL,
+    updated_at      REAL NOT NULL
+);
+"""
+
+
+def connect() -> sqlite3.Connection:
+    ensure_dirs()
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Additive migrations for databases created by an earlier version."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(companies)")}
+    if "jobs_fetched_at" not in cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN jobs_fetched_at REAL")
+
+
+def init_db() -> None:
+    # sqlite3's own context manager commits but does NOT close, so use session().
+    with session() as conn:
+        conn.executescript(SCHEMA)
+        _migrate(conn)
+
+
+@contextmanager
+def session() -> Iterator[sqlite3.Connection]:
+    """Own a connection for the block. Commits on clean exit, rolls back on error.
+
+    Individual store_* helpers also commit, so this is the outer safety net rather than
+    the only transaction boundary.
+    """
+    conn = connect()
+    try:
+        yield conn
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: Any) -> None:
+    conn.execute(
+        "INSERT INTO meta(key, value, updated_at) VALUES(?,?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (key, json.dumps(value), time.time()),
+    )
+
+
+def get_meta(conn: sqlite3.Connection, key: str, default: Any = None) -> Any:
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return json.loads(row["value"]) if row else default
+
+
+def is_fresh(fetched_at: float | None, ttl: float) -> bool:
+    return fetched_at is not None and (time.time() - fetched_at) < ttl

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "prospect-scope",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "scrape-test", "serve", "--port", "8000"],
+      "port": 8000
+    }
+  ]
+}
