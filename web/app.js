@@ -209,6 +209,32 @@ function renderYC(yc) {
         </div>`).join("")}</div>`
     : `<p class="empty">No tooling named in job descriptions.</p>`;
 
+  const ycNews = yc.yc_news || [];
+  const ycNewsBlock = ycNews.length
+    ? `<ul class="postlist">${ycNews.map((n) => {
+        const href = safeUrl(n.url);
+        const when = (n.published || "").slice(0, 12);
+        const title = href
+          ? `<a class="ext" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(n.title)}</a>`
+          : esc(n.title);
+        return `<li>${when ? `<span class="postdate">${esc(when)}</span>` : ""}${title}</li>`;
+      }).join("")}</ul>`
+    : `<p class="empty">YC lists no news for this company.</p>`;
+
+  const launches = yc.yc_launches || [];
+  const launchBlock = launches.length
+    ? launches.map((l) => {
+        const href = safeUrl(l.url);
+        return `<div class="launch">
+          <div class="launchtitle">${href
+            ? `<a class="ext" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(l.title)}</a>`
+            : esc(l.title)}
+            <span class="postdate">${esc((l.published || "").slice(0, 10))}</span></div>
+          <div class="launchbody">${esc((l.summary || "").slice(0, 320))}${(l.summary || "").length > 320 ? "…" : ""}</div>
+        </div>`;
+      }).join("")
+    : "";
+
   const posts = yc.posts || [];
   const postBlock = posts.length
     ? `<ul class="postlist">${posts.slice(0, 8).map((p) => {
@@ -247,13 +273,18 @@ function renderYC(yc) {
       <div class="scorebox">
         <div class="scorelabel">Atlassian fit</div>
         <div class="scorenum" style="color:${scoreColor(s.total)}">${s.total.toFixed(0)}</div>
-        <div class="conf ${esc(s.confidence)}">${esc(s.confidence)} confidence</div>
+        <div class="conf ${esc(s.confidence)}" title="${esc((s.confidence_reasons || []).join(" · "))}">${esc(s.confidence)} confidence</div>
       </div>
     </div>
 
     <details class="breakdown" open>
       <summary>Why this score — ${esc(s.rules_version)}</summary>
       <div style="margin-top:8px">${renderBreakdown(s)}</div>
+      ${(s.confidence_reasons || []).length ? `
+        <div class="confwhy">
+          <span class="confwhyhead">Why ${esc(s.confidence)} confidence</span>
+          <ul>${s.confidence_reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+        </div>` : ""}
     </details>
 
     <h4 class="section">Tech stack (from job posting skills)</h4>
@@ -269,6 +300,10 @@ function renderYC(yc) {
     ${detBlocks || `<p class="empty">${esc(fp.error || "Nothing detected.")}</p>`}
     <p class="notice">Public surface only — a solid signal that a tool is in use, but absence
     proves nothing. Hover a chip to see the matching evidence. Dashed chips are weak matches.</p>
+
+    <h4 class="section">YC-curated news</h4>
+    ${ycNewsBlock}
+    ${launchBlock ? `<h4 class="section">Launch YC post</h4>${launchBlock}` : ""}
 
     <h4 class="section">From the company's own site
       ${posts.length ? `<span style="text-transform:none;letter-spacing:0;font-weight:400"> &middot; ${esc(yc.posts_via || "")}</span>` : ""}</h4>

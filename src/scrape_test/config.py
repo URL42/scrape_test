@@ -39,6 +39,7 @@ TTL_POSTS = 24 * 3600
 
 YC_DIRECTORY_URL = "https://yc-oss.github.io/api/companies/all.json"
 YC_COMPANY_URL = "https://www.ycombinator.com/companies/{slug}"
+TTL_YC_NEWS = 24 * 3600
 YC_JOBS_URL = "https://www.ycombinator.com/companies/{slug}/jobs"
 
 

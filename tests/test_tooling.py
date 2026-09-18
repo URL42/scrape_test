@@ -123,5 +123,61 @@ class TestScoringUsesJobEvidence:
         with_tools = compute_score(
             self.COMPANY, jobs, fp, self._tools("We use Linear for issue tracking.")
         )
-        assert without.confidence == "medium"
-        assert with_tools.confidence == "high"
+        assert without.confidence == "low"
+        assert with_tools.confidence == "medium"
+
+
+class TestConfidenceReflectsInformativeness:
+    """The old grading answered "is there any data?" and called two year-old postings plus
+    a Cloudflare hit "high". These pin the corrected semantics."""
+
+    COMPANY = {"name": "T", "batch": "Fall 2025", "team_size": 20}
+
+    def test_generic_website_tech_does_not_inflate_confidence(self):
+        fp = {
+            "detected": {
+                "hosting": [{"product": "Cloudflare", "confidence": "strong"}],
+                "analytics": [{"product": "Google Analytics", "confidence": "strong"}],
+            }
+        }
+        jobs = [{"role": "eng", "pretty_role": "Engineering", "last_active_rel": "1 year"}]
+        result = compute_score(self.COMPANY, jobs, fp, [])
+        assert result.confidence == "low"
+        assert any("bears on coordination" in r for r in result.confidence_reasons)
+
+    def test_stale_postings_are_penalised(self):
+        fresh = compute_score(
+            self.COMPANY,
+            [
+                {
+                    "role": "eng",
+                    "pretty_role": "Engineering",
+                    "last_active_rel": "3 days",
+                    "description": "We use Linear for issue tracking.",
+                }
+            ],
+            {"detected": {}},
+            [{"product": "Linear", "category": "issue_tracking", "strength": "stated"}],
+        )
+        stale = compute_score(
+            self.COMPANY,
+            [
+                {
+                    "role": "eng",
+                    "pretty_role": "Engineering",
+                    "last_active_rel": "2 years",
+                    "description": "We use Linear for issue tracking.",
+                }
+            ],
+            {"detected": {}},
+            [{"product": "Linear", "category": "issue_tracking", "strength": "stated"}],
+        )
+        assert fresh.confidence == "high"
+        assert stale.confidence == "medium"
+        assert any("over 6 months old" in r for r in stale.confidence_reasons)
+
+    def test_reasons_are_always_present(self):
+        result = compute_score(self.COMPANY, [], {}, [])
+        assert result.confidence == "low"
+        assert result.confidence_reasons
+        assert "confidence_reasons" in result.as_dict()

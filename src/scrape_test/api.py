@@ -93,10 +93,12 @@ async def _yc_block(company: str, refresh: bool) -> dict[str, Any]:
             }
         c = company_dict(row)
         try:
-            jobs, jobs_cached = await get_jobs(conn, client(), c["id"], c["slug"], force=refresh)
+            jobs, jobs_cached, yc_items = await get_jobs(
+                conn, client(), c["id"], c["slug"], force=refresh
+            )
         except Exception as exc:  # noqa: BLE001
             log.warning("jobs fetch failed for %s: %s", c["slug"], exc)
-            jobs, jobs_cached = [], False
+            jobs, jobs_cached, yc_items = [], False, []
         fp, fp_cached = await get_fingerprint(conn, client(), c["id"], c["website"], force=refresh)
         try:
             posts, posts_cached, posts_via = await get_company_posts(
@@ -106,7 +108,7 @@ async def _yc_block(company: str, refresh: bool) -> dict[str, Any]:
             log.warning("company posts failed for %s: %s", c["slug"], exc)
             posts, posts_cached, posts_via = [], False, str(exc)[:120]
 
-        tools = [t.as_dict() for t in tools_from_jobs(jobs)]
+        tools = [t.as_dict() for t in tools_from_jobs(jobs, yc_items)]
         score = compute_score(c, jobs, fp, tools)
         store_score(conn, c["id"], score)
 
@@ -120,6 +122,8 @@ async def _yc_block(company: str, refresh: bool) -> dict[str, Any]:
             "fingerprint": fp,
             "posts": posts,
             "posts_via": posts_via,
+            "yc_news": [i for i in yc_items if i["source"] == "yc_news"],
+            "yc_launches": [i for i in yc_items if i["source"] == "yc_launch"],
             "score": score.as_dict(),
             "cached": {
                 "jobs": jobs_cached,
@@ -150,7 +154,8 @@ async def brief(
         jobs = load_jobs(conn, c["id"])
         fp = load_fingerprint(conn, c["id"]) or {}
         posts = load_posts(conn, c["id"])
-        tools = [t.as_dict() for t in tools_from_jobs(jobs)]
+        yc_items = load_posts(conn, c["id"], sources=("yc_news", "yc_launch"))
+        tools = [t.as_dict() for t in tools_from_jobs(jobs, yc_items)]
         score = compute_score(c, jobs, fp, tools).as_dict()
 
     news = await _news_block(company, context, source, limit=12)

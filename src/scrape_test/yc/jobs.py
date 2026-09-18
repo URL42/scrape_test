@@ -22,7 +22,7 @@ from typing import Any
 
 import httpx
 
-from ..config import TTL_JOBS, YC_JOBS_URL
+from ..config import TTL_JOBS, YC_COMPANY_URL
 from ..db import is_fresh
 from ..http import fetch
 from .tooling import ToolHit, detect_tools, merge_hits
@@ -113,18 +113,55 @@ async def enrich_descriptions(client: httpx.AsyncClient, postings: list[dict[str
             posting["description"] = result
 
 
-async def fetch_jobs(client: httpx.AsyncClient, slug: str) -> list[dict[str, Any]]:
-    resp = await fetch(client, YC_JOBS_URL.format(slug=slug))
+def _normalize_news(raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source": "yc_news",
+        "title": (raw.get("title") or "").strip(),
+        "url": raw.get("url"),
+        "published": raw.get("date"),
+        "summary": "",
+    }
+
+
+def _normalize_launch(raw: dict[str, Any]) -> dict[str, Any]:
+    body = re.sub(r"<[^>]+>", " ", str(raw.get("body") or ""))
+    return {
+        "source": "yc_launch",
+        "title": (raw.get("title") or "").strip(),
+        "url": (
+            f"https://www.ycombinator.com/launches/{raw['slug']}" if raw.get("slug") else None
+        ),
+        "published": raw.get("created_at"),
+        "summary": re.sub(r"\s+", " ", f"{raw.get('tagline') or ''} {body}").strip()[:2000],
+    }
+
+
+async def fetch_company_page(
+    client: httpx.AsyncClient, slug: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Fetch the company profile once and return (postings, yc_items).
+
+    The profile page carries the same `jobPostings` as /jobs *plus* YC's own curated
+    `newsItems` and any Launch YC post - so reading it instead of /jobs costs nothing and
+    yields strictly more. Launch bodies are kept because they are company-written prose,
+    another place tooling gets named.
+    """
+    resp = await fetch(client, YC_COMPANY_URL.format(slug=slug))
     if resp.status_code == 404:
-        # No jobs page is a valid answer, not a failure; it gets cached like any other.
-        return []
+        # No profile is a valid answer, not a failure; it gets cached like any other.
+        return [], []
     if not resp.ok:
         raise JobsUnavailable(f"HTTP {resp.status_code} for {slug}")
-    payload = extract_inertia_payload(resp.text)
-    postings = payload.get("props", {}).get("jobPostings") or []
-    normalized = [_normalize_posting(p) for p in postings if p.get("id")]
+    props = extract_inertia_payload(resp.text).get("props", {})
+
+    normalized = [
+        _normalize_posting(p) for p in (props.get("jobPostings") or []) if p.get("id")
+    ]
     await enrich_descriptions(client, normalized)
-    return normalized
+
+    yc_items = [_normalize_news(n) for n in (props.get("newsItems") or []) if n.get("title")]
+    yc_items += [_normalize_launch(x) for x in (props.get("launches") or []) if x.get("title")]
+    return normalized, yc_items
 
 
 def store_jobs(conn: sqlite3.Connection, company_id: int, postings: list[dict[str, Any]]) -> None:
@@ -196,23 +233,36 @@ async def get_jobs(
     slug: str,
     *,
     force: bool = False,
-) -> tuple[list[dict[str, Any]], bool]:
-    """Return (postings, from_cache). Write-through cache keyed on TTL_JOBS."""
+) -> tuple[list[dict[str, Any]], bool, list[dict[str, Any]]]:
+    """Return (postings, from_cache, yc_items). Write-through cache keyed on TTL_JOBS."""
+    from .site_news import load_posts, store_yc_items
+
     if not force and is_fresh(jobs_cache_age(conn, company_id), TTL_JOBS):
-        return load_jobs(conn, company_id), True
-    postings = await fetch_jobs(client, slug)
+        return (
+            load_jobs(conn, company_id),
+            True,
+            load_posts(conn, company_id, sources=("yc_news", "yc_launch")),
+        )
+    postings, yc_items = await fetch_company_page(client, slug)
     store_jobs(conn, company_id, postings)
-    return load_jobs(conn, company_id), False
-
-
-def tools_from_jobs(postings: list[dict[str, Any]]) -> list[ToolHit]:
-    """Mine job descriptions for named tooling, attributing each hit to its posting."""
-    return merge_hits(
-        [
-            detect_tools(p.get("description") or "", source=p.get("title") or "role")
-            for p in postings
-        ]
+    store_yc_items(conn, company_id, yc_items)
+    return load_jobs(conn, company_id), False, load_posts(
+        conn, company_id, sources=("yc_news", "yc_launch")
     )
+
+
+def tools_from_jobs(
+    postings: list[dict[str, Any]], extra: list[dict[str, Any]] | None = None
+) -> list[ToolHit]:
+    """Mine job descriptions (and any Launch YC body) for named tooling."""
+    groups = [
+        detect_tools(p.get("description") or "", source=p.get("title") or "role")
+        for p in postings
+    ]
+    for item in extra or []:
+        if item.get("source") == "yc_launch" and item.get("summary"):
+            groups.append(detect_tools(item["summary"], source="YC launch post"))
+    return merge_hits(groups)
 
 
 def stack_from_jobs(postings: list[dict[str, Any]]) -> list[dict[str, Any]]:

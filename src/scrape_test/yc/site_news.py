@@ -310,22 +310,56 @@ async def fetch_company_posts(
 
 
 def store_posts(conn: sqlite3.Connection, company_id: int, posts: list[Post]) -> None:
+    """Replace the company's own-site posts. Leaves YC-sourced rows alone."""
     now = time.time()
     conn.execute("UPDATE companies SET posts_fetched_at = ? WHERE id = ?", (now, company_id))
-    conn.execute("DELETE FROM company_posts WHERE company_id = ?", (company_id,))
+    conn.execute(
+        "DELETE FROM company_posts WHERE company_id = ? AND source = 'own_site'",
+        (company_id,),
+    )
     conn.executemany(
         """INSERT OR IGNORE INTO company_posts
-               (company_id, title, url, published, summary, fetched_at)
-           VALUES (?,?,?,?,?,?)""",
+               (company_id, source, title, url, published, summary, fetched_at)
+           VALUES (?,'own_site',?,?,?,?,?)""",
         [(company_id, p.title, p.url, p.published, p.summary, now) for p in posts],
     )
     conn.commit()
 
 
-def load_posts(conn: sqlite3.Connection, company_id: int) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        "SELECT title, url, published, summary FROM company_posts WHERE company_id = ? ORDER BY id",
+def store_yc_items(
+    conn: sqlite3.Connection, company_id: int, items: list[dict[str, Any]]
+) -> None:
+    """Replace YC-sourced items: their curated news list and any Launch YC post."""
+    now = time.time()
+    conn.execute(
+        "DELETE FROM company_posts WHERE company_id = ? AND source IN ('yc_news','yc_launch')",
         (company_id,),
+    )
+    conn.executemany(
+        """INSERT OR IGNORE INTO company_posts
+               (company_id, source, title, url, published, summary, fetched_at)
+           VALUES (?,?,?,?,?,?,?)""",
+        [
+            (
+                company_id, i["source"], i["title"], i.get("url"),
+                i.get("published"), i.get("summary") or "", now,
+            )
+            for i in items
+        ],
+    )
+    conn.commit()
+
+
+def load_posts(
+    conn: sqlite3.Connection,
+    company_id: int,
+    sources: tuple[str, ...] = ("own_site",),
+) -> list[dict[str, Any]]:
+    placeholders = ",".join("?" for _ in sources)
+    rows = conn.execute(
+        "SELECT source, title, url, published, summary FROM company_posts "
+        f"WHERE company_id = ? AND source IN ({placeholders}) ORDER BY id",
+        (company_id, *sources),
     ).fetchall()
     return [dict(r) for r in rows]
 

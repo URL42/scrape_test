@@ -47,12 +47,14 @@ async def _cmd_lookup(args: argparse.Namespace) -> int:
                     print("did you mean:", ", ".join(suggestions))
                 return 1
             c = company_dict(row)
-            jobs, _ = await get_jobs(conn, client, c["id"], c["slug"], force=args.refresh)
+            jobs, _, yc_items = await get_jobs(
+                conn, client, c["id"], c["slug"], force=args.refresh
+            )
             fp, _ = await get_fingerprint(conn, client, c["id"], c["website"], force=args.refresh)
             posts, _, posts_via = await get_company_posts(
                 conn, client, c["id"], c["website"], force=args.refresh
             )
-            tools = [t.as_dict() for t in tools_from_jobs(jobs)]
+            tools = [t.as_dict() for t in tools_from_jobs(jobs, yc_items)]
             result = compute_score(c, jobs, fp, tools)
             store_score(conn, c["id"], result)
 
@@ -75,6 +77,8 @@ async def _cmd_lookup(args: argparse.Namespace) -> int:
     print(f"\n{c['name']}  ({c['batch']}, {c['status']}, team {c['team_size']})")
     print(f"  {c['one_liner'] or ''}")
     print(f"\n  Atlassian fit: {result.total:.1f}/100   confidence: {result.confidence}")
+    for reason in result.confidence_reasons:
+        print(f"      - {reason}")
     for s in result.signals:
         if abs(s.points) > 0.01:
             print(f"    {s.points:+6.1f}  {s.label:22} {s.reason}")
@@ -83,6 +87,11 @@ async def _cmd_lookup(args: argparse.Namespace) -> int:
         for t in tools:
             print(f"    [{t['strength']:9}] {t['product']:16} {t['category']}")
             print(f'       "{t["evidence"][:88]}"')
+    yc_news = [i for i in yc_items if i["source"] == "yc_news"]
+    if yc_news:
+        print("\n  YC-curated news:")
+        for n in yc_news[:6]:
+            print(f"    {(n.get('published') or '')[:12]:13} {(n.get('title') or '')[:62]}")
     if posts:
         print(f"\n  Company's own posts ({posts_via}):")
         for p_ in posts[:5]:
@@ -129,10 +138,10 @@ async def _cmd_brief(args: argparse.Namespace) -> int:
                     print("did you mean:", ", ".join(suggestions))
                 return 1
             c = company_dict(row)
-            jobs, _ = await get_jobs(conn, client, c["id"], c["slug"])
+            jobs, _, yc_items = await get_jobs(conn, client, c["id"], c["slug"])
             fp, _ = await get_fingerprint(conn, client, c["id"], c["website"])
             posts, _, _ = await get_company_posts(conn, client, c["id"], c["website"])
-            tools = [t.as_dict() for t in tools_from_jobs(jobs)]
+            tools = [t.as_dict() for t in tools_from_jobs(jobs, yc_items)]
             score = compute_score(c, jobs, fp, tools).as_dict()
 
         try:

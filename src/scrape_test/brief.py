@@ -88,7 +88,11 @@ is Jira, Confluence, and Rovo / the teamwork graph.
 You are given real scraped data about a Y Combinator company: directory facts, open job \
 postings with a curated skills array, tooling named in the text of those job descriptions, \
 publicly detectable tooling on their website, a heuristic Atlassian-fit score with its \
-per-signal breakdown, third-party news headlines, and posts from the company's own blog.
+per-signal breakdown, YC's own curated news list, any Launch YC post, third-party news \
+headlines, and posts from the company's own blog.
+
+The score now carries confidence_reasons explaining how it was graded. Read them: a "high" \
+label backed by thin reasons still deserves a hedged email.
 
 Evidence is not equal. Tooling named in a job description is the company stating its own \
 stack - treat it as the strongest signal you have. A website fingerprint is an inference \
@@ -195,6 +199,27 @@ def _fmt_posts(posts: list[dict[str, Any]], limit: int = 10) -> str:
     )
 
 
+def _fmt_yc_news(items: list[dict[str, Any]], limit: int = 8) -> str:
+    """YC curates a press list per company - far less noisy than a news search."""
+    news = [i for i in items if i.get("source") == "yc_news"][:limit]
+    if not news:
+        return "YC lists no news for this company."
+    return "\n".join(f"- {i['title']} ({i.get('published') or 'undated'})" for i in news)
+
+
+def _fmt_launches(items: list[dict[str, Any]]) -> str:
+    launches = [i for i in items if i.get("source") == "yc_launch"]
+    if not launches:
+        return "No Launch YC post."
+    out = []
+    for launch in launches:
+        out.append(
+            f"- {launch['title']} ({(launch.get('published') or '')[:10]})\n"
+            f"    {(launch.get('summary') or '')[:700]}"
+        )
+    return "\n".join(out)
+
+
 def build_payload(
     company: dict[str, Any],
     jobs: list[dict[str, Any]],
@@ -204,6 +229,7 @@ def build_payload(
     articles: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
     posts: list[dict[str, Any]] | None = None,
+    yc_items: list[dict[str, Any]] | None = None,
 ) -> str:
     """Assemble the grounded context. Kept pure so it can be tested without an API call."""
     stack_line = (
@@ -235,6 +261,12 @@ Description: {(company.get("long_description") or "")[:1200]}
 {_fmt_fingerprint(fingerprint)}
 
 ## {_fmt_score(score)}
+
+## YC's own curated news list for this company
+{_fmt_yc_news(yc_items or [])}
+
+## Launch YC post (company-written)
+{_fmt_launches(yc_items or [])}
 
 ## Recent news (third-party coverage)
 {_fmt_news(articles)}

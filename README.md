@@ -34,6 +34,7 @@ driving a stealth browser would be slower and more brittle for nothing.
 |---|---|---|---|
 | Directory | [yc-oss mirror](https://yc-oss.github.io/api) of YC's public directory | 1 request, prefetched | batch, team size, hiring flag, tags, website |
 | Jobs | `ycombinator.com/companies/<slug>/jobs` | 1 request, cached 12h | curated `skills[]`, role, salary, equity, seniority, activity |
+| Company page | `ycombinator.com/companies/<slug>` | **1** | jobs, **YC-curated news**, **Launch YC post** |
 | Job detail | each engineering posting's page | 1 request each, cached 12h | **tooling named in prose** |
 | Website | the company's own homepage | 1 request, cached 7d | publicly detectable tooling |
 | Company posts | feed / sitemap / blog page | up to ~6 requests, cached 24h | their own announcements |
@@ -167,6 +168,18 @@ Scoring trusts this over the website: a posting naming a competitor scores highe
 website hit, because the former is the company describing its own workflow and the latter
 is an inference from marketing HTML.
 
+## YC's own news and launches
+
+The company *profile* page carries the same `jobPostings` as `/jobs`, **plus** `newsItems`
+(a YC-curated press list) and any Launch YC post. Reading the profile instead of `/jobs`
+costs exactly the same one request and yields strictly more, so that is what the scraper
+now fetches.
+
+The curated list is far less noisy than a news search - for Rollstack it is the $11M
+Series A announcement, the TechCrunch write-up and a Demo Day round-up, with no
+disambiguation problem. Launch YC bodies are company-written prose, so they are mined for
+tooling alongside job descriptions.
+
 ## The company's own news
 
 Google News is thin on small startups, but they still announce funding and launches on
@@ -179,6 +192,23 @@ JavaScript, so both a feed lookup and a static scrape come back empty - but thei
 list every post with a `lastmod` date. Page scraping is deliberately last: a naive scrape
 returns megamenu items like "Financial Services" instead of articles, so it ignores
 nav/header/footer chrome and requires links to live under the section being read.
+
+## Confidence means "how informative", not "how much"
+
+The first version of the confidence grade asked whether job and website data *existed*.
+That read **high** for a company with two year-old postings and a Cloudflare hit - inputs
+that support almost no conclusion. The brief itself caught this, writing of Vanta: *"Score's
+'confidence high' is misleading because inputs are thin."* It was right.
+
+Confidence is now earned by evidence that could actually change the call - tooling named
+outright (+3), descriptions actually read (+2), a posting active in the last 3 months (+1),
+website tooling that bears on coordination (+1) - and penalised when every posting is over
+six months old (-2), since stale evidence alone must not reach "high". Generic hosting and
+analytics detections earn nothing.
+
+Crucially the grade now **explains itself**: `confidence_reasons` comes back with the score
+and is shown in the UI, so a misleading label can be spotted rather than trusted. Vanta now
+reads **low**, citing stale postings and irrelevant website tooling.
 
 ## What the website fingerprint can and cannot tell you
 
@@ -216,7 +246,7 @@ web/            index.html + app.js + style.css (vanilla, no build step)
 ## Development
 
 ```bash
-uv run pytest          # 115 tests (unit, async, tooling precision, LLM providers, env)
+uv run pytest          # 118 tests (unit, async, tooling precision, confidence, LLM, env)
 uv run ruff check src tests
 uv run mypy
 ```

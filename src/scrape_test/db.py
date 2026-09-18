@@ -82,12 +82,13 @@ CREATE TABLE IF NOT EXISTS scores (
 CREATE TABLE IF NOT EXISTS company_posts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id      INTEGER NOT NULL REFERENCES companies(id),
+    source          TEXT NOT NULL DEFAULT 'own_site',  -- own_site | yc_news | yc_launch
     title           TEXT NOT NULL,
     url             TEXT,
     published       TEXT,
     summary         TEXT,
     fetched_at      REAL NOT NULL,
-    UNIQUE(company_id, url)
+    UNIQUE(company_id, source, url)
 );
 CREATE INDEX IF NOT EXISTS idx_posts_company ON company_posts(company_id);
 
@@ -126,6 +127,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     job_cols = {r["name"] for r in conn.execute("PRAGMA table_info(job_postings)")}
     if "description" not in job_cols:
         conn.execute("ALTER TABLE job_postings ADD COLUMN description TEXT")
+    post_cols = {r["name"] for r in conn.execute("PRAGMA table_info(company_posts)")}
+    if post_cols and "source" not in post_cols:
+        # The UNIQUE constraint changed, so rebuild rather than ALTER.
+        conn.execute("DROP TABLE company_posts")
+        conn.executescript(SCHEMA)
 
 
 def init_db() -> None:

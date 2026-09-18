@@ -54,9 +54,9 @@ class TestJobsCache:
 
         async with _client(handler) as client:
             with db_mod.session() as conn:
-                jobs, cached = await get_jobs(conn, client, 1, "acme")
+                jobs, cached, _yc = await get_jobs(conn, client, 1, "acme")
                 assert jobs == [] and cached is False
-                jobs, cached = await get_jobs(conn, client, 1, "acme")
+                jobs, cached, _yc = await get_jobs(conn, client, 1, "acme")
                 assert cached is True
         assert len(calls) == 1, "cached lookup must not hit the network again"
 
