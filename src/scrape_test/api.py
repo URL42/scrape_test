@@ -14,8 +14,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .brief import (
-    MODEL,
     BriefUnavailable,
+    active_provider,
     build_payload,
     credentials_available,
     generate_brief,
@@ -156,7 +156,7 @@ async def brief(
         {
             "company": c["name"],
             "brief": result.model_dump(),
-            "model": MODEL,
+            "model": active_provider().model,
             "created_at": time.time(),
             "cached": False,
         }
@@ -175,7 +175,11 @@ async def sources() -> dict[str, Any]:
         "directory": {"companies": count, "fetched_at": fetched},
         "rules_version": RULES_VERSION,
         "weights": WEIGHTS,
-        "brief": {"available": credentials_available(), "model": MODEL},
+        "brief": {
+            "available": credentials_available(),
+            "provider": active_provider().label,
+            "model": active_provider().model,
+        },
     }
 
 

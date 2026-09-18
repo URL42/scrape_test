@@ -13,23 +13,28 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import sqlite3
 import time
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from .llm import LLMProvider, LLMUnavailable, get_provider
 from .scoring.rules import WEIGHTS
+
+# Callers catch one exception regardless of which backend is configured.
+BriefUnavailable = LLMUnavailable
 
 log = logging.getLogger(__name__)
 
-MODEL = os.environ.get("SCRAPE_TEST_MODEL", "claude-opus-5")
-MAX_TOKENS = int(os.environ.get("SCRAPE_TEST_MAX_TOKENS", "8000"))
+
+def active_provider() -> LLMProvider:
+    """The configured brain. DeepSeek by default; SCRAPE_TEST_LLM=claude switches."""
+    return get_provider()
 
 
-class BriefUnavailable(Exception):
-    """The brief could not be generated (no credentials, API error, or refusal)."""
+def credentials_available() -> bool:
+    return active_provider().credentials_available()
 
 
 class Brief(BaseModel):
@@ -200,65 +205,20 @@ Description: {(company.get("long_description") or "")[:1200]}
 
 
 def payload_hash(payload: str) -> str:
-    """Cache key. Hashing the assembled payload means any change to the underlying data,
-    or to the model, produces a new brief - and nothing else does."""
-    return hashlib.sha256(f"{MODEL}\n{payload}".encode()).hexdigest()
-
-
-def credentials_available() -> bool:
-    """Best-effort check so the UI can disable the button instead of failing on click.
-
-    The SDK resolves credentials from several places, so this errs toward saying yes and
-    letting the API surface a real error rather than blocking a working setup.
-    """
-    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
-        return True
-    from pathlib import Path
-
-    return (Path.home() / ".config" / "anthropic").exists()
+    """Cache key. Hashing the payload plus the active model means any change to the data,
+    or switching brain, produces a new brief - and nothing else does."""
+    provider = active_provider()
+    return hashlib.sha256(f"{provider.key}:{provider.model}\n{payload}".encode()).hexdigest()
 
 
 async def generate_brief(payload: str, *, client: Any = None) -> Brief:
-    """Call Claude and return a validated Brief.
+    """Ask the configured provider for a validated Brief.
 
-    `client` is injectable so tests can exercise prompt assembly and parsing without
-    spending money or needing credentials.
+    `client` is injectable so tests exercise prompt assembly, validation and the retry
+    loop without spending money or needing credentials.
     """
-    import anthropic
-
-    if client is None:
-        if not credentials_available():
-            raise BriefUnavailable(
-                "No Anthropic credentials found. Set ANTHROPIC_API_KEY in the environment "
-                "(or run `ant auth login`) and restart the server."
-            )
-        client = anthropic.AsyncAnthropic()
-
-    try:
-        response = await client.messages.parse(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            thinking={"type": "adaptive"},
-            messages=[{"role": "user", "content": payload}],
-            output_format=Brief,
-        )
-    except anthropic.AuthenticationError as exc:
-        raise BriefUnavailable(f"Anthropic rejected the credentials: {exc}") from exc
-    except anthropic.RateLimitError as exc:
-        raise BriefUnavailable(f"Rate limited by the Anthropic API: {exc}") from exc
-    except anthropic.APIStatusError as exc:
-        raise BriefUnavailable(f"Anthropic API error {exc.status_code}: {exc}") from exc
-    except anthropic.APIConnectionError as exc:
-        raise BriefUnavailable(f"Could not reach the Anthropic API: {exc}") from exc
-
-    if getattr(response, "stop_reason", None) == "refusal":
-        raise BriefUnavailable("The model declined to generate this brief.")
-
-    parsed = getattr(response, "parsed_output", None)
-    if parsed is None:
-        raise BriefUnavailable("The model returned no parseable structured output.")
-    return parsed
+    provider = active_provider()
+    return await provider.generate(SYSTEM_PROMPT, payload, Brief, client=client)
 
 
 # --------------------------------------------------------------------------------------
@@ -273,7 +233,7 @@ def store_brief(conn: sqlite3.Connection, company_id: int, input_hash: str, brie
            ON CONFLICT(company_id) DO UPDATE SET
                input_hash=excluded.input_hash, model=excluded.model,
                payload=excluded.payload, created_at=excluded.created_at""",
-        (company_id, input_hash, MODEL, brief.model_dump_json(), time.time()),
+        (company_id, input_hash, active_provider().model, brief.model_dump_json(), time.time()),
     )
     conn.commit()
 

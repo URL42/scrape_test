@@ -34,7 +34,9 @@ async function loadSources() {
       ? new Date(d.directory.fetched_at * 1000).toLocaleString()
       : "never";
     briefAvailable = !!(d.brief && d.brief.available);
-    const briefNote = briefAvailable ? `brief: ${d.brief.model}` : "brief: no API key";
+    const briefNote = briefAvailable
+      ? `brief: ${d.brief.provider} ${d.brief.model}`
+      : `brief: no ${(d.brief && d.brief.provider) || ""} API key`.replace(/\s+/g, " ");
     $("dirmeta").textContent =
       `${n.toLocaleString()} YC companies · refreshed ${when} · rules ${d.rules_version} · ${briefNote}`;
   } catch {
@@ -243,7 +245,7 @@ function renderYC(yc) {
       <p class="notice" id="briefnote">
         ${briefAvailable
           ? "Interprets everything above and drafts outreach. Costs one API call; the result is cached."
-          : "Needs an Anthropic API key. Set ANTHROPIC_API_KEY and restart the server."}
+          : "No API key for the configured model backend. Set the key and restart the server."}
       </p>
       <button type="button" id="briefbtn" ${briefAvailable ? "" : "disabled"}>Generate brief</button>
       <button type="button" id="briefregen" class="secondary" hidden>Regenerate</button>

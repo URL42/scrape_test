@@ -4,11 +4,9 @@ do NOT prove a live API call succeeds."""
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
-from scrape_test import brief as brief_mod
+from conftest import sample_brief
 from scrape_test import db as db_mod
 from scrape_test.brief import (
     Brief,
@@ -19,46 +17,66 @@ from scrape_test.brief import (
     payload_hash,
     store_brief,
 )
+from scrape_test.llm import get_provider
 
 COMPANY = {
-    "id": 1, "name": "Acme", "batch": "Fall 2025", "status": "Active", "team_size": 18,
-    "industry": "B2B", "subindustry": "Infra", "tags": ["AI"], "website": "https://acme.test",
-    "one_liner": "Ships widgets", "long_description": "A longer description.",
+    "id": 1,
+    "name": "Acme",
+    "batch": "Fall 2025",
+    "status": "Active",
+    "team_size": 18,
+    "industry": "B2B",
+    "subindustry": "Infra",
+    "tags": ["AI"],
+    "website": "https://acme.test",
+    "one_liner": "Ships widgets",
+    "long_description": "A longer description.",
 }
-JOBS = [{
-    "pretty_role": "Engineering", "role": "eng", "title": "Senior Backend Engineer",
-    "skills": ["Python", "PostgreSQL", "Kubernetes"], "salary_range": "$150K - $200K",
-    "equity_range": "0.1%", "min_experience": "5+ years", "location": "SF",
-    "last_active_rel": "3 days",
-}]
-STACK = [{"skill": "Python", "mentions": 1}, {"skill": "Kubernetes", "mentions": 1}]
-FP = {"detected": {"source_control": [{"product": "GitHub", "confidence": "strong",
-                                       "evidence": "github.com/acme"}]}, "error": None}
-SCORE = {
-    "total": 61.3, "confidence": "high", "rules_version": "test-1",
-    "signals": [{"key": "eng_hiring_volume", "label": "Engineering hiring", "points": 8.0,
-                 "weight": 20.0, "strength": 0.4, "reason": "1 open engineering role"}],
-}
-ARTICLES = [{"title": "Acme raises $20M Series A", "source": "TechCrunch",
-             "published": "2026-09-01", "url": "https://tc.test/acme"}]
-
-
-def sample_brief(**over) -> Brief:
-    data = {
-        "headline": "Series A plus backend hiring means coordination load is about to jump.",
-        "news_summary": "Acme raised a $20M Series A this month.",
-        "interpretation": "An 18-person team hiring senior backend engineers post-raise.",
-        "priority": "pursue now",
-        "recommended_action": "Reach out referencing the raise.",
-        "news_hook": "The $20M Series A",
-        "talking_points": ["Hiring senior backend engineers", "Kubernetes in the stack"],
-        "risks": ["May already use an incumbent internally"],
-        "evidence_gaps": ["No Atlassian detected publicly, which proves nothing"],
-        "email_subject": "Scaling after the Series A",
-        "email_body": "Congratulations on the raise.\n\nSaw you are hiring backend engineers.",
+JOBS = [
+    {
+        "pretty_role": "Engineering",
+        "role": "eng",
+        "title": "Senior Backend Engineer",
+        "skills": ["Python", "PostgreSQL", "Kubernetes"],
+        "salary_range": "$150K - $200K",
+        "equity_range": "0.1%",
+        "min_experience": "5+ years",
+        "location": "SF",
+        "last_active_rel": "3 days",
     }
-    data.update(over)
-    return Brief(**data)
+]
+STACK = [{"skill": "Python", "mentions": 1}, {"skill": "Kubernetes", "mentions": 1}]
+FP = {
+    "detected": {
+        "source_control": [
+            {"product": "GitHub", "confidence": "strong", "evidence": "github.com/acme"}
+        ]
+    },
+    "error": None,
+}
+SCORE = {
+    "total": 61.3,
+    "confidence": "high",
+    "rules_version": "test-1",
+    "signals": [
+        {
+            "key": "eng_hiring_volume",
+            "label": "Engineering hiring",
+            "points": 8.0,
+            "weight": 20.0,
+            "strength": 0.4,
+            "reason": "1 open engineering role",
+        }
+    ],
+}
+ARTICLES = [
+    {
+        "title": "Acme raises $20M Series A",
+        "source": "TechCrunch",
+        "published": "2026-09-01",
+        "url": "https://tc.test/acme",
+    }
+]
 
 
 class FakeResponse:
@@ -68,6 +86,8 @@ class FakeResponse:
 
 
 class FakeMessages:
+    """Stands in for the Anthropic client (native structured output)."""
+
     def __init__(self, response):
         self._response = response
         self.calls: list[dict] = []
@@ -82,17 +102,11 @@ class FakeClient:
         self.messages = FakeMessages(response)
 
 
-@pytest.fixture
-def temp_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(db_mod, "DB_PATH", tmp_path / "b.db")
-    db_mod.init_db()
-    with db_mod.session() as conn:
-        conn.execute(
-            "INSERT INTO companies (id, slug, name, norm_name, fetched_at) "
-            "VALUES (1,'acme','Acme','acme',?)",
-            (time.time(),),
-        )
-    return tmp_path
+@pytest.fixture(autouse=True)
+def use_claude_provider(monkeypatch):
+    """These tests inject an Anthropic-shaped client, so pin the Claude backend.
+    DeepSeek behaviour is covered separately in test_llm_deepseek.py."""
+    monkeypatch.setenv("SCRAPE_TEST_LLM", "claude")
 
 
 class TestPayload:
@@ -101,8 +115,15 @@ class TestPayload:
 
     def test_includes_the_facts_the_model_must_ground_on(self):
         p = self._payload()
-        for expected in ("Acme", "Fall 2025", "Senior Backend Engineer", "Kubernetes",
-                         "GitHub", "61.3", "Acme raises $20M Series A"):
+        for expected in (
+            "Acme",
+            "Fall 2025",
+            "Senior Backend Engineer",
+            "Kubernetes",
+            "GitHub",
+            "61.3",
+            "Acme raises $20M Series A",
+        ):
             assert expected in p, f"missing {expected!r} from payload"
 
     def test_marks_fingerprint_confidence(self):
@@ -123,8 +144,14 @@ class TestHash:
 
     def test_new_article_changes_the_hash(self):
         a = build_payload(COMPANY, JOBS, STACK, FP, SCORE, ARTICLES)
-        b = build_payload(COMPANY, JOBS, STACK, FP, SCORE, ARTICLES + [
-            {"title": "Acme launches", "source": "VB", "published": "2026-09-10"}])
+        b = build_payload(
+            COMPANY,
+            JOBS,
+            STACK,
+            FP,
+            SCORE,
+            ARTICLES + [{"title": "Acme launches", "source": "VB", "published": "2026-09-10"}],
+        )
         assert payload_hash(a) != payload_hash(b), "stale brief would be served"
 
 
@@ -156,7 +183,11 @@ class TestGenerate:
             await generate_brief("P", client=client)
 
     async def test_no_credentials_gives_an_actionable_message(self, monkeypatch):
-        monkeypatch.setattr(brief_mod, "credentials_available", lambda: False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+        monkeypatch.setattr(
+            get_provider("claude").__class__, "credentials_available", lambda self: False
+        )
         with pytest.raises(BriefUnavailable, match="ANTHROPIC_API_KEY"):
             await generate_brief("P")
 

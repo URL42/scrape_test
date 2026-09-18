@@ -10,6 +10,7 @@ dependencies = [
     "feedparser>=6.0.11",
     "selectolax>=0.3.21",
     "anthropic>=1.6.0",
+    "openai>=3.14.1",
 ]
 
 [project.scripts]
