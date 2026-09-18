@@ -1,3 +1,10 @@
+# Secrets - never commit. This repo is public.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
 data/
 __pycache__/
 *.py[cod]

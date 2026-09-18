@@ -12,6 +12,7 @@ Both halves run concurrently against a single lookup.
 ## Quick start
 
 ```bash
+cp .env.example .env      # add your DEEPSEEK_API_KEY
 uv sync && uv run scrape-test serve
 ```
 
@@ -66,7 +67,7 @@ draft outreach email. The seller persona is an Atlassian AE focused on Jira, Con
 Rovo / the teamwork graph.
 
 ```bash
-export DEEPSEEK_API_KEY=sk-...
+cp .env.example .env      # then paste your key in
 uv run scrape-test brief "Stripe" --context "funding fintech"
 ```
 
@@ -80,6 +81,10 @@ fresh brief, and only **Regenerate** spends again.
 ### Choosing a backend
 
 `SCRAPE_TEST_LLM` selects the provider, `SCRAPE_TEST_MODEL` overrides its model.
+
+Secrets go in `.env` (gitignored; `.env.example` documents every key). A real environment
+variable always wins over the file, so `SCRAPE_TEST_MODEL=deepseek-flash uv run ...` still
+works for a one-off.
 
 | Provider | Default model | Roughly per brief | Key |
 |---|---|---|---|
@@ -170,7 +175,7 @@ web/            index.html + app.js + style.css (vanilla, no build step)
 ## Development
 
 ```bash
-uv run pytest          # 83 tests (unit, async, brief + LLM providers with mocked clients)
+uv run pytest          # 89 tests (unit, async, LLM providers, env/secret handling)
 uv run ruff check src tests
 uv run mypy
 ```

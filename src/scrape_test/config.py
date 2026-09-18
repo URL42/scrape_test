@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ENV_FILE = PROJECT_ROOT / ".env"  # loaded in __init__.py, the real import chokepoint
 DATA_DIR = Path(os.environ.get("SCRAPE_TEST_DATA", PROJECT_ROOT / "data"))
 DB_PATH = DATA_DIR / "scrape_test.db"
 WEB_DIR = PROJECT_ROOT / "web"
