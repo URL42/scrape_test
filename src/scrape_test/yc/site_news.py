@@ -326,9 +326,7 @@ def store_posts(conn: sqlite3.Connection, company_id: int, posts: list[Post]) ->
     conn.commit()
 
 
-def store_yc_items(
-    conn: sqlite3.Connection, company_id: int, items: list[dict[str, Any]]
-) -> None:
+def store_yc_items(conn: sqlite3.Connection, company_id: int, items: list[dict[str, Any]]) -> None:
     """Replace YC-sourced items: their curated news list and any Launch YC post."""
     now = time.time()
     conn.execute(
@@ -341,8 +339,13 @@ def store_yc_items(
            VALUES (?,?,?,?,?,?,?)""",
         [
             (
-                company_id, i["source"], i["title"], i.get("url"),
-                i.get("published"), i.get("summary") or "", now,
+                company_id,
+                i["source"],
+                i["title"],
+                i.get("url"),
+                i.get("published"),
+                i.get("summary") or "",
+                now,
             )
             for i in items
         ],

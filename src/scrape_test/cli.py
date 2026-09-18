@@ -47,9 +47,7 @@ async def _cmd_lookup(args: argparse.Namespace) -> int:
                     print("did you mean:", ", ".join(suggestions))
                 return 1
             c = company_dict(row)
-            jobs, _, yc_items = await get_jobs(
-                conn, client, c["id"], c["slug"], force=args.refresh
-            )
+            jobs, _, yc_items = await get_jobs(conn, client, c["id"], c["slug"], force=args.refresh)
             fp, _ = await get_fingerprint(conn, client, c["id"], c["website"], force=args.refresh)
             posts, _, posts_via = await get_company_posts(
                 conn, client, c["id"], c["website"], force=args.refresh

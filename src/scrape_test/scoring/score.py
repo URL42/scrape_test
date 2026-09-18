@@ -85,8 +85,7 @@ def _confidence(
         reasons.append("no open roles listed")
 
     ages = [
-        d for d in (parse_relative_days(j.get("last_active_rel")) for j in jobs)
-        if d is not None
+        d for d in (parse_relative_days(j.get("last_active_rel")) for j in jobs) if d is not None
     ]
     if ages and min(ages) <= 90:
         points += 1

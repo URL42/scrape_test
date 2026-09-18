@@ -181,3 +181,92 @@ class TestConfidenceReflectsInformativeness:
         assert result.confidence == "low"
         assert result.confidence_reasons
         assert "confidence_reasons" in result.as_dict()
+
+
+class TestDescriptionRoleFilter:
+    """Which roles are worth a request. Measured across 39 non-engineering postings:
+    product named tooling in 3 of 4 descriptions; marketing (13) and operations (22)
+    named none. PMs live in the tracker and write the docs, so they say which ones."""
+
+    def _p(self, role, pretty):
+        return {"role": role, "pretty_role": pretty, "url": "/x"}
+
+    @pytest.mark.parametrize(
+        "role,pretty",
+        [("eng", "Engineering"), ("product", "Product")],
+    )
+    def test_included_roles(self, role, pretty, monkeypatch):
+        from scrape_test.yc.jobs import wants_description
+
+        monkeypatch.delenv("SCRAPE_TEST_DESC_ROLES", raising=False)
+        assert wants_description(self._p(role, pretty))
+
+    @pytest.mark.parametrize(
+        "role,pretty",
+        [
+            ("marketing", "Marketing"),
+            ("operations", "Operations"),
+            ("sales", "Sales"),
+            ("finance", "Finance"),
+        ],
+    )
+    def test_excluded_roles(self, role, pretty, monkeypatch):
+        from scrape_test.yc.jobs import wants_description
+
+        monkeypatch.delenv("SCRAPE_TEST_DESC_ROLES", raising=False)
+        assert not wants_description(self._p(role, pretty))
+
+    def test_role_set_is_configurable(self, monkeypatch):
+        from scrape_test.yc.jobs import wants_description
+
+        monkeypatch.setenv("SCRAPE_TEST_DESC_ROLES", "design,product")
+        assert wants_description(self._p("design", "Design"))
+        assert not wants_description(self._p("eng", "Engineering"))
+
+    def test_hiring_volume_signal_stays_engineering_only(self, monkeypatch):
+        """Widening description fetching must not widen the eng-hiring signal."""
+        from scrape_test.yc.jobs import is_engineering
+
+        monkeypatch.setenv("SCRAPE_TEST_DESC_ROLES", "eng,product")
+        assert is_engineering(self._p("eng", "Engineering"))
+        assert not is_engineering(self._p("product", "Product"))
+
+
+class TestTitleOverridesRoleSlug:
+    """YC's role slug is sometimes wrong - Ooak Data files an "ML engineer" posting under
+    Operations - so a technical or product title wins over the slug."""
+
+    def _p(self, role, pretty, title):
+        return {"role": role, "pretty_role": pretty, "title": title, "url": "/x"}
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "ML engineer",
+            "Senior Backend Developer",
+            "Staff Architect",
+            "Product Manager, Platform",
+            "DevOps Lead",
+        ],
+    )
+    def test_technical_title_under_a_wrong_slug_is_still_read(self, title, monkeypatch):
+        from scrape_test.yc.jobs import wants_description
+
+        monkeypatch.delenv("SCRAPE_TEST_DESC_ROLES", raising=False)
+        assert wants_description(self._p("operations", "Operations", title))
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "Chief of Staff",
+            "Founding Marketing Lead",
+            "Head of People",
+            "Account Executive",
+            "Tax Expert",
+        ],
+    )
+    def test_non_technical_titles_are_still_skipped(self, title, monkeypatch):
+        from scrape_test.yc.jobs import wants_description
+
+        monkeypatch.delenv("SCRAPE_TEST_DESC_ROLES", raising=False)
+        assert not wants_description(self._p("operations", "Operations", title))
