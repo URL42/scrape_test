@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS companies (
     launched_at     INTEGER,
     top_company     INTEGER NOT NULL DEFAULT 0,
     fetched_at      REAL NOT NULL,
-    jobs_fetched_at REAL
+    jobs_fetched_at REAL,
+    posts_fetched_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_companies_norm ON companies(norm_name);
 CREATE INDEX IF NOT EXISTS idx_companies_hiring ON companies(is_hiring);
@@ -54,6 +55,7 @@ CREATE TABLE IF NOT EXISTS job_postings (
     url             TEXT,
     created_at_rel  TEXT,
     last_active_rel TEXT,
+    description     TEXT,
     fetched_at      REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_company ON job_postings(company_id);
@@ -76,6 +78,18 @@ CREATE TABLE IF NOT EXISTS scores (
     rules_version   TEXT NOT NULL,
     computed_at     REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS company_posts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id      INTEGER NOT NULL REFERENCES companies(id),
+    title           TEXT NOT NULL,
+    url             TEXT,
+    published       TEXT,
+    summary         TEXT,
+    fetched_at      REAL NOT NULL,
+    UNIQUE(company_id, url)
+);
+CREATE INDEX IF NOT EXISTS idx_posts_company ON company_posts(company_id);
 
 CREATE TABLE IF NOT EXISTS briefs (
     company_id      INTEGER PRIMARY KEY REFERENCES companies(id),
@@ -107,6 +121,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(companies)")}
     if "jobs_fetched_at" not in cols:
         conn.execute("ALTER TABLE companies ADD COLUMN jobs_fetched_at REAL")
+    if "posts_fetched_at" not in cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN posts_fetched_at REAL")
+    job_cols = {r["name"] for r in conn.execute("PRAGMA table_info(job_postings)")}
+    if "description" not in job_cols:
+        conn.execute("ALTER TABLE job_postings ADD COLUMN description TEXT")
 
 
 def init_db() -> None:

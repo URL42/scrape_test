@@ -22,7 +22,8 @@ from .scoring import RULES_VERSION, compute_score
 from .scoring.score import rescore_all, store_score
 from .yc.directory import company_dict, refresh_directory, resolve
 from .yc.fingerprint import get_fingerprint
-from .yc.jobs import get_jobs, stack_from_jobs
+from .yc.jobs import get_jobs, stack_from_jobs, tools_from_jobs
+from .yc.site_news import get_company_posts
 
 
 async def _cmd_refresh(args: argparse.Namespace) -> int:
@@ -48,7 +49,11 @@ async def _cmd_lookup(args: argparse.Namespace) -> int:
             c = company_dict(row)
             jobs, _ = await get_jobs(conn, client, c["id"], c["slug"], force=args.refresh)
             fp, _ = await get_fingerprint(conn, client, c["id"], c["website"], force=args.refresh)
-            result = compute_score(c, jobs, fp)
+            posts, _, posts_via = await get_company_posts(
+                conn, client, c["id"], c["website"], force=args.refresh
+            )
+            tools = [t.as_dict() for t in tools_from_jobs(jobs)]
+            result = compute_score(c, jobs, fp, tools)
             store_score(conn, c["id"], result)
 
     if args.json:
@@ -73,6 +78,16 @@ async def _cmd_lookup(args: argparse.Namespace) -> int:
     for s in result.signals:
         if abs(s.points) > 0.01:
             print(f"    {s.points:+6.1f}  {s.label:22} {s.reason}")
+    if tools:
+        print("\n  Tooling named in job descriptions:")
+        for t in tools:
+            print(f"    [{t['strength']:9}] {t['product']:16} {t['category']}")
+            print(f'       "{t["evidence"][:88]}"')
+    if posts:
+        print(f"\n  Company's own posts ({posts_via}):")
+        for p_ in posts[:5]:
+            print(f"    {(p_.get('published') or '')[:10]:11} {(p_.get('title') or '')[:64]}")
+
     stack = stack_from_jobs(jobs)
     if stack:
         print("\n  Stack from job postings:")
@@ -116,7 +131,9 @@ async def _cmd_brief(args: argparse.Namespace) -> int:
             c = company_dict(row)
             jobs, _ = await get_jobs(conn, client, c["id"], c["slug"])
             fp, _ = await get_fingerprint(conn, client, c["id"], c["website"])
-            score = compute_score(c, jobs, fp).as_dict()
+            posts, _, _ = await get_company_posts(conn, client, c["id"], c["website"])
+            tools = [t.as_dict() for t in tools_from_jobs(jobs)]
+            score = compute_score(c, jobs, fp, tools).as_dict()
 
         try:
             articles = await get_source(args.source).search(
@@ -127,7 +144,14 @@ async def _cmd_brief(args: argparse.Namespace) -> int:
             articles = []
 
     payload = build_payload(
-        c, jobs, stack_from_jobs(jobs), fp, score, [a.as_dict() for a in articles]
+        c,
+        jobs,
+        stack_from_jobs(jobs),
+        fp,
+        score,
+        [a.as_dict() for a in articles],
+        tools=tools,
+        posts=posts,
     )
     digest = payload_hash(payload)
 

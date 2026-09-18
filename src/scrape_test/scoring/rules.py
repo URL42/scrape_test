@@ -14,6 +14,7 @@ Bump RULES_VERSION whenever you change weights or logic, so stored scores stay c
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -100,6 +101,21 @@ def parse_batch(batch: str | None) -> tuple[int, int] | None:
     return int(m.group(2)), _SEASON_ORDER[m.group(1).lower()]
 
 
+def stated_tools(tools: list[dict[str, Any]], *, exclude: set[str] | None = None) -> list[str]:
+    """Products a job description says the company uses. The strongest signal we collect:
+    a posting reading "Issue tracking with Linear" is the company stating its own stack,
+    which beats inferring from a public website."""
+    exclude = exclude or set()
+    return [
+        t["product"] for t in tools if t.get("strength") == "stated" and t["product"] not in exclude
+    ]
+
+
+def mentioned_tools(tools: list[dict[str, Any]], *, exclude: set[str] | None = None) -> list[str]:
+    exclude = exclude or set()
+    return [t["product"] for t in tools if t["product"] not in exclude]
+
+
 def _strong(fingerprint: dict[str, Any], category: str) -> list[str]:
     """Products detected in a category with strong (actually-served) evidence."""
     items = (fingerprint.get("detected") or {}).get(category, [])
@@ -117,7 +133,10 @@ def _any_conf(fingerprint: dict[str, Any], category: str) -> list[str]:
 
 
 def signal_eng_hiring_volume(
-    company: dict[str, Any], jobs: list[dict[str, Any]], fp: dict[str, Any]
+    company: dict[str, Any],
+    jobs: list[dict[str, Any]],
+    fp: dict[str, Any],
+    tools: list[dict[str, Any]],
 ) -> tuple[float, str]:
     eng = [j for j in jobs if is_engineering(j)]
     n = len(eng)
@@ -128,7 +147,10 @@ def signal_eng_hiring_volume(
 
 
 def signal_team_size_threshold(
-    company: dict[str, Any], jobs: list[dict[str, Any]], fp: dict[str, Any]
+    company: dict[str, Any],
+    jobs: list[dict[str, Any]],
+    fp: dict[str, Any],
+    tools: list[dict[str, Any]],
 ) -> tuple[float, str]:
     size = company.get("team_size")
     if not size:
@@ -140,19 +162,38 @@ def signal_team_size_threshold(
 
 
 def signal_competing_tools(
-    company: dict[str, Any], jobs: list[dict[str, Any]], fp: dict[str, Any]
+    company: dict[str, Any],
+    jobs: list[dict[str, Any]],
+    fp: dict[str, Any],
+    tools: list[dict[str, Any]],
 ) -> tuple[float, str]:
-    found = _strong(fp, "competing_tools")
-    if found:
-        return 1.0, f"uses {', '.join(sorted(found))} - displaceable"
-    weak = _any_conf(fp, "competing_tools")
-    if weak:
-        return 0.35, f"possible {', '.join(sorted(set(weak)))} (weak evidence)"
-    return 0.0, "no competing project tooling detected publicly"
+    """Rank evidence by how directly the company vouches for it.
+
+    A job description naming a competitor outranks a website hit: the former is the
+    company describing its own workflow, the latter is an inference from marketing HTML.
+    """
+    stated = stated_tools(tools, exclude=ATLASSIAN_PRODUCTS)
+    if stated:
+        return 1.0, f"job postings name {', '.join(sorted(stated))} - displaceable"
+
+    named = mentioned_tools(tools, exclude=ATLASSIAN_PRODUCTS)
+    site_strong = _strong(fp, "competing_tools")
+    if site_strong:
+        return 0.85, f"site uses {', '.join(sorted(site_strong))} - displaceable"
+    if named:
+        return 0.5, f"job postings mention {', '.join(sorted(set(named)))}"
+
+    site_weak = _any_conf(fp, "competing_tools")
+    if site_weak:
+        return 0.35, f"possible {', '.join(sorted(set(site_weak)))} (weak evidence)"
+    return 0.0, "no competing project tooling detected"
 
 
 def signal_stack_complexity(
-    company: dict[str, Any], jobs: list[dict[str, Any]], fp: dict[str, Any]
+    company: dict[str, Any],
+    jobs: list[dict[str, Any]],
+    fp: dict[str, Any],
+    tools: list[dict[str, Any]],
 ) -> tuple[float, str]:
     skills = {s for j in jobs for s in (j.get("skills") or [])}
     n = len(skills)
@@ -166,7 +207,10 @@ def signal_stack_complexity(
 
 
 def signal_job_freshness(
-    company: dict[str, Any], jobs: list[dict[str, Any]], fp: dict[str, Any]
+    company: dict[str, Any],
+    jobs: list[dict[str, Any]],
+    fp: dict[str, Any],
+    tools: list[dict[str, Any]],
 ) -> tuple[float, str]:
     raw = (parse_relative_days(j.get("last_active_rel")) for j in jobs)
     ages = [d for d in raw if d is not None]
@@ -183,7 +227,10 @@ def signal_job_freshness(
 
 
 def signal_recent_batch(
-    company: dict[str, Any], jobs: list[dict[str, Any]], fp: dict[str, Any]
+    company: dict[str, Any],
+    jobs: list[dict[str, Any]],
+    fp: dict[str, Any],
+    tools: list[dict[str, Any]],
 ) -> tuple[float, str]:
     parsed = parse_batch(company.get("batch"))
     if not parsed:
@@ -202,22 +249,45 @@ def signal_recent_batch(
 
 
 def signal_already_atlassian(
-    company: dict[str, Any], jobs: list[dict[str, Any]], fp: dict[str, Any]
+    company: dict[str, Any],
+    jobs: list[dict[str, Any]],
+    fp: dict[str, Any],
+    tools: list[dict[str, Any]],
 ) -> tuple[float, str]:
     """Negative weight: a strong hit means they already pay Atlassian."""
-    strong = [p for p in _strong(fp, "atlassian") if p in ATLASSIAN_PRODUCTS]
-    if strong:
-        return 1.0, f"already exposes {', '.join(sorted(strong))} - expansion, not net-new"
+    stated = [
+        t["product"]
+        for t in tools
+        if t.get("strength") == "stated" and t["product"] in ATLASSIAN_PRODUCTS
+    ]
+    if stated:
+        return 1.0, f"job postings name {', '.join(sorted(stated))} - existing customer"
+
+    site_strong = [p for p in _strong(fp, "atlassian") if p in ATLASSIAN_PRODUCTS]
+    if site_strong:
+        return 0.9, f"site exposes {', '.join(sorted(site_strong))} - expansion, not net-new"
+
+    named = [t["product"] for t in tools if t["product"] in ATLASSIAN_PRODUCTS]
+    if named:
+        return 0.6, f"job postings mention {', '.join(sorted(set(named)))}"
+
     skills = {s.lower() for j in jobs for s in (j.get("skills") or [])}
     if {"jira", "confluence", "bitbucket"} & skills:
-        return 0.8, "job postings name Atlassian tools"
+        return 0.8, "job skills list Atlassian tools"
+
     weak = _any_conf(fp, "atlassian")
     if weak:
         return 0.2, f"weak/ambiguous Atlassian reference ({', '.join(sorted(set(weak)))})"
-    return 0.0, "no public Atlassian footprint"
+    return 0.0, "no Atlassian footprint found in postings or on the site"
 
 
-SIGNALS = {
+# (company, jobs, fingerprint, tools) -> (strength 0..1, human-readable reason)
+SignalFn = Callable[
+    [dict[str, Any], list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]],
+    tuple[float, str],
+]
+
+SIGNALS: dict[str, SignalFn] = {
     "eng_hiring_volume": signal_eng_hiring_volume,
     "team_size_threshold": signal_team_size_threshold,
     "competing_tools": signal_competing_tools,

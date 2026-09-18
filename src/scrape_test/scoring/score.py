@@ -37,15 +37,18 @@ class ScoreResult:
         }
 
 
-def _confidence(jobs: list[dict[str, Any]], fp: dict[str, Any]) -> str:
+def _confidence(jobs: list[dict[str, Any]], fp: dict[str, Any], tools: list[dict[str, Any]]) -> str:
     """How much evidence is behind the number, so a 0 from 'no data' reads differently
     from a 0 from 'genuinely a poor fit'."""
     has_jobs = bool(jobs)
     has_site = bool(fp.get("detected")) and not fp.get("error")
-    if has_jobs and has_site:
+    has_tools = bool(tools)
+    if has_tools and (has_jobs or has_site):
         return "high"
-    if has_jobs or has_site:
+    if has_jobs and has_site:
         return "medium"
+    if has_jobs or has_site:
+        return "low"
     return "low"
 
 
@@ -53,14 +56,17 @@ def compute_score(
     company: dict[str, Any],
     jobs: list[dict[str, Any]],
     fingerprint: dict[str, Any] | None,
+    tools: list[dict[str, Any]] | None = None,
 ) -> ScoreResult:
+    """`tools` are tooling hits mined from job descriptions (see yc/tooling.py)."""
     fp = fingerprint or {}
+    tool_hits = tools or []
     signals: list[Signal] = []
     earned = 0.0
 
     for key, fn in SIGNALS.items():
         weight = WEIGHTS.get(key, 0.0)
-        strength, reason = fn(company, jobs, fp)
+        strength, reason = fn(company, jobs, fp, tool_hits)
         strength = max(0.0, min(1.0, strength))
         points = strength * weight
         earned += points
@@ -82,7 +88,7 @@ def compute_score(
     signals.sort(key=lambda s: -abs(s.points))
     return ScoreResult(
         total=total,
-        confidence=_confidence(jobs, fp),
+        confidence=_confidence(jobs, fp, tool_hits),
         signals=signals,
         rules_version=RULES_VERSION,
     )

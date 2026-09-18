@@ -74,8 +74,8 @@ class TestBatchRecencyIsNotPinnedToAYear:
         from scrape_test.scoring.rules import signal_recent_batch
 
         this_year = datetime.now(UTC).year
-        fresh, _ = signal_recent_batch({"batch": f"Winter {this_year}"}, [], {})
-        old, _ = signal_recent_batch({"batch": "Winter 2009"}, [], {})
+        fresh, _ = signal_recent_batch({"batch": f"Winter {this_year}"}, [], {}, [])
+        old, _ = signal_recent_batch({"batch": "Winter 2009"}, [], {}, [])
         assert fresh == 1.0
         assert old < fresh
 

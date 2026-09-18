@@ -31,7 +31,8 @@ from .scoring import RULES_VERSION, WEIGHTS, compute_score
 from .scoring.score import rescore_all, store_score
 from .yc.directory import company_dict, refresh_directory, resolve
 from .yc.fingerprint import get_fingerprint, load_fingerprint
-from .yc.jobs import get_jobs, load_jobs, stack_from_jobs
+from .yc.jobs import get_jobs, load_jobs, stack_from_jobs, tools_from_jobs
+from .yc.site_news import get_company_posts, load_posts
 
 log = logging.getLogger(__name__)
 _client: httpx.AsyncClient | None = None
@@ -97,7 +98,16 @@ async def _yc_block(company: str, refresh: bool) -> dict[str, Any]:
             log.warning("jobs fetch failed for %s: %s", c["slug"], exc)
             jobs, jobs_cached = [], False
         fp, fp_cached = await get_fingerprint(conn, client(), c["id"], c["website"], force=refresh)
-        score = compute_score(c, jobs, fp)
+        try:
+            posts, posts_cached, posts_via = await get_company_posts(
+                conn, client(), c["id"], c["website"], force=refresh
+            )
+        except Exception as exc:  # noqa: BLE001 - own-site news is a bonus, never fatal
+            log.warning("company posts failed for %s: %s", c["slug"], exc)
+            posts, posts_cached, posts_via = [], False, str(exc)[:120]
+
+        tools = [t.as_dict() for t in tools_from_jobs(jobs)]
+        score = compute_score(c, jobs, fp, tools)
         store_score(conn, c["id"], score)
 
         return {
@@ -106,9 +116,16 @@ async def _yc_block(company: str, refresh: bool) -> dict[str, Any]:
             "yc_url": f"https://www.ycombinator.com/companies/{c['slug']}",
             "jobs": jobs,
             "stack": stack_from_jobs(jobs),
+            "tools": tools,
             "fingerprint": fp,
+            "posts": posts,
+            "posts_via": posts_via,
             "score": score.as_dict(),
-            "cached": {"jobs": jobs_cached, "fingerprint": fp_cached},
+            "cached": {
+                "jobs": jobs_cached,
+                "fingerprint": fp_cached,
+                "posts": posts_cached,
+            },
         }
 
 
@@ -132,10 +149,21 @@ async def brief(
 
         jobs = load_jobs(conn, c["id"])
         fp = load_fingerprint(conn, c["id"]) or {}
-        score = compute_score(c, jobs, fp).as_dict()
+        posts = load_posts(conn, c["id"])
+        tools = [t.as_dict() for t in tools_from_jobs(jobs)]
+        score = compute_score(c, jobs, fp, tools).as_dict()
 
     news = await _news_block(company, context, source, limit=12)
-    payload = build_payload(c, jobs, stack_from_jobs(jobs), fp, score, news["articles"])
+    payload = build_payload(
+        c,
+        jobs,
+        stack_from_jobs(jobs),
+        fp,
+        score,
+        news["articles"],
+        tools=tools,
+        posts=posts,
+    )
     digest = payload_hash(payload)
 
     if not regenerate:

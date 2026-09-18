@@ -194,6 +194,33 @@ function renderYC(yc) {
         `<span class="chip">${esc(x.skill)}${x.mentions > 1 ? `<b>×${x.mentions}</b>` : ""}</span>`).join("")}</div>`
     : `<p class="empty">No stack data — YC only lists skills on engineering postings.</p>`;
 
+  const tools = yc.tools || [];
+  const toolBlock = tools.length
+    ? `<div class="tools">${tools.map((t) => `
+        <div class="tool ${esc(t.strength)}">
+          <div class="toolhead">
+            <span class="toolname">${esc(t.product)}</span>
+            <span class="toolcat">${esc(t.category.replace(/_/g, " "))}</span>
+            <span class="toolstrength ${esc(t.strength)}">${esc(t.strength)}</span>
+          </div>
+          <div class="toolev">“${esc(t.evidence)}”</div>
+          ${t.sources && t.sources.length
+            ? `<div class="toolsrc">from: ${esc(t.sources.join(", "))}</div>` : ""}
+        </div>`).join("")}</div>`
+    : `<p class="empty">No tooling named in job descriptions.</p>`;
+
+  const posts = yc.posts || [];
+  const postBlock = posts.length
+    ? `<ul class="postlist">${posts.slice(0, 8).map((p) => {
+        const href = safeUrl(p.url);
+        const when = (p.published || "").slice(0, 10);
+        const title = href
+          ? `<a class="ext" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a>`
+          : esc(p.title);
+        return `<li>${when ? `<span class="postdate">${esc(when)}</span>` : ""}${title}</li>`;
+      }).join("")}</ul>`
+    : `<p class="empty">${esc(yc.posts_via || "No posts found.")}</p>`;
+
   const detected = fp.detected || {};
   const detBlocks = Object.keys(detected).sort().map((cat) => `
     <div style="margin-bottom:8px">
@@ -229,13 +256,23 @@ function renderYC(yc) {
       <div style="margin-top:8px">${renderBreakdown(s)}</div>
     </details>
 
-    <h4 class="section">Tech stack (from job postings)</h4>
+    <h4 class="section">Tech stack (from job posting skills)</h4>
     ${stack}
+
+    <h4 class="section">Tooling named in job descriptions</h4>
+    ${toolBlock}
+    <p class="notice">The company describing its own stack in prose &mdash; the strongest
+    signal here, and stronger than the website fingerprint below. Detection uses a fixed
+    catalog, so the brief is also asked to spot anything it misses.</p>
 
     <h4 class="section">Detected on website</h4>
     ${detBlocks || `<p class="empty">${esc(fp.error || "Nothing detected.")}</p>`}
     <p class="notice">Public surface only — a solid signal that a tool is in use, but absence
     proves nothing. Hover a chip to see the matching evidence. Dashed chips are weak matches.</p>
+
+    <h4 class="section">From the company's own site
+      ${posts.length ? `<span style="text-transform:none;letter-spacing:0;font-weight:400"> &middot; ${esc(yc.posts_via || "")}</span>` : ""}</h4>
+    ${postBlock}
 
     <h4 class="section">Open roles</h4>
     <div id="jobswrap">${jobsTable()}</div>

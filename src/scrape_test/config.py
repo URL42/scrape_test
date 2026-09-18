@@ -35,6 +35,7 @@ DEFAULT_THROTTLE = 0.0
 TTL_DIRECTORY = 24 * 3600
 TTL_JOBS = 12 * 3600
 TTL_FINGERPRINT = 7 * 24 * 3600
+TTL_POSTS = 24 * 3600
 
 YC_DIRECTORY_URL = "https://yc-oss.github.io/api/companies/all.json"
 YC_COMPANY_URL = "https://www.ycombinator.com/companies/{slug}"

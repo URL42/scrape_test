@@ -137,3 +137,22 @@ ul.brieflist li { margin-bottom: 3px; }
 .email { border: 1px dashed var(--border); border-radius: 8px; padding: 12px; margin-top: 6px; }
 .emailsubj { font-weight: 650; font-size: 13.5px; margin-bottom: 8px; }
 .email pre { margin: 0 0 10px; white-space: pre-wrap; font: inherit; font-size: 13.5px; color: var(--text); }
+
+/* ---- tooling named in job descriptions ---- */
+.tools { display: flex; flex-direction: column; gap: 8px; }
+.tool { border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; background: var(--bg); }
+.tool.stated { border-left: 3px solid var(--good); }
+.tool.mentioned { border-left: 3px solid var(--border); }
+.toolhead { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.toolname { font-weight: 650; font-size: 14px; }
+.toolcat { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; }
+.toolstrength { margin-left: auto; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--chip); }
+.toolstrength.stated { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); font-weight: 600; }
+.toolev { color: var(--muted); font-size: 12.5px; margin-top: 4px; font-style: italic; }
+.toolsrc { color: var(--muted); font-size: 11.5px; margin-top: 3px; opacity: .8; }
+
+/* ---- company's own posts ---- */
+ul.postlist { list-style: none; margin: 0; padding: 0; font-size: 13.5px; }
+ul.postlist li { padding: 5px 0; border-bottom: 1px solid var(--border); display: flex; gap: 10px; }
+ul.postlist li:last-child { border-bottom: 0; }
+.postdate { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; min-width: 74px; }

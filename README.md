@@ -34,7 +34,9 @@ driving a stealth browser would be slower and more brittle for nothing.
 |---|---|---|---|
 | Directory | [yc-oss mirror](https://yc-oss.github.io/api) of YC's public directory | 1 request, prefetched | batch, team size, hiring flag, tags, website |
 | Jobs | `ycombinator.com/companies/<slug>/jobs` | 1 request, cached 12h | curated `skills[]`, role, salary, equity, seniority, activity |
+| Job detail | each engineering posting's page | 1 request each, cached 12h | **tooling named in prose** |
 | Website | the company's own homepage | 1 request, cached 7d | publicly detectable tooling |
+| Company posts | feed / sitemap / blog page | up to ~6 requests, cached 24h | their own announcements |
 | News | Google News RSS **or** GDELT | 1 request per search | recent coverage |
 
 The jobs page is an [Inertia.js](https://inertiajs.com) app: the server embeds the entire
@@ -139,6 +141,45 @@ HTTP if you would rather not leave the browser. Bump `RULES_VERSION` when you ch
 logic so stored scores stay comparable. Every score in the UI expands into a per-signal
 breakdown showing exactly which facts produced which points.
 
+## Tooling named in job descriptions
+
+The strongest signal here, and the reason job *detail* pages are fetched at all. The
+structured `skills` array is often empty while the description says outright what the
+company runs. Rollstack's AI Software Engineer posting is the canonical case:
+
+> "Issue tracking with **Linear**."
+
+`skills: []` on that posting. A scraper reading only the array sees nothing.
+
+Detection covers what Atlassian sells against - issue trackers, wikis, source hosts, CI,
+service desks, on-call, whiteboards and knowledge search - graded **stated** (usage or
+requirement phrasing nearby) or **mentioned**, and every hit keeps the sentence it came
+from so you can judge it yourself. The catalog is in
+[`yc/tooling.py`](src/scrape_test/yc/tooling.py) and is a floor, not a ceiling: the brief
+is explicitly asked to flag products the catalog misses.
+
+**Precision is the hard part.** Several product names are ordinary English - *Linear*
+(linear algebra), *Monday* (the weekday), *Notion* (an idea), *Height*, *Guru*, *Harness*,
+*Shortcut*. Those require nearby tooling context and are checked against a false-friend
+list. The test suite asserts that ten such sentences produce zero detections.
+
+Scoring trusts this over the website: a posting naming a competitor scores higher than a
+website hit, because the former is the company describing its own workflow and the latter
+is an inference from marketing HTML.
+
+## The company's own news
+
+Google News is thin on small startups, but they still announce funding and launches on
+their own site - and engineering posts often name the stack. Four strategies, cheapest
+first: a feed declared in the homepage, common feed paths, **sitemap.xml**, then scraping
+the blog page.
+
+The sitemap earns its place. Rollstack and Vanta publish no feed and render their blogs in
+JavaScript, so both a feed lookup and a static scrape come back empty - but their sitemaps
+list every post with a `lastmod` date. Page scraping is deliberately last: a naive scrape
+returns megamenu items like "Financial Services" instead of articles, so it ignores
+nav/header/footer chrome and requires links to live under the section being read.
+
 ## What the website fingerprint can and cannot tell you
 
 It reads the **public surface only** — a linked status page, docs site, careers portal,
@@ -175,7 +216,7 @@ web/            index.html + app.js + style.css (vanilla, no build step)
 ## Development
 
 ```bash
-uv run pytest          # 89 tests (unit, async, LLM providers, env/secret handling)
+uv run pytest          # 115 tests (unit, async, tooling precision, LLM providers, env)
 uv run ruff check src tests
 uv run mypy
 ```

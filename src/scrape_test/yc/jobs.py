@@ -11,8 +11,10 @@ which is the only path we touch.
 
 from __future__ import annotations
 
+import asyncio
 import html as html_mod
 import json
+import logging
 import re
 import sqlite3
 import time
@@ -23,6 +25,9 @@ import httpx
 from ..config import TTL_JOBS, YC_JOBS_URL
 from ..db import is_fresh
 from ..http import fetch
+from .tooling import ToolHit, detect_tools, merge_hits
+
+log = logging.getLogger(__name__)
 
 _DATA_PAGE = re.compile(r'data-page="([^"]*)"')
 
@@ -41,6 +46,15 @@ def extract_inertia_payload(html: str) -> dict[str, Any]:
         raise JobsUnavailable(f"data-page was not valid JSON: {exc}") from exc
 
 
+ENGINEERING_ROLES = {"eng", "engineering"}
+
+
+def is_engineering(posting: dict[str, Any]) -> bool:
+    role = (posting.get("role") or "").strip().lower()
+    pretty = (posting.get("pretty_role") or "").strip().lower()
+    return role in ENGINEERING_ROLES or pretty == "engineering"
+
+
 def _normalize_posting(raw: dict[str, Any]) -> dict[str, Any]:
     return {
         "yc_job_id": raw.get("id"),
@@ -57,7 +71,46 @@ def _normalize_posting(raw: dict[str, Any]) -> dict[str, Any]:
         "url": f"https://www.ycombinator.com{raw['url']}" if raw.get("url") else None,
         "created_at_rel": raw.get("createdAt"),
         "last_active_rel": raw.get("lastActive"),
+        "description": raw.get("description"),
     }
+
+
+async def fetch_description(client: httpx.AsyncClient, job_url: str) -> str | None:
+    """Pull one posting's description.
+
+    The jobs list payload carries no description - only the individual job page does, and
+    that is where companies actually name their tooling. Rollstack's AI Software Engineer
+    posting says "Issue tracking with Linear" in prose while its `skills` array is empty.
+    """
+    try:
+        resp = await fetch(client, job_url, retries=2)
+    except Exception as exc:  # noqa: BLE001 - one missing description must not fail a lookup
+        log.debug("description fetch failed for %s: %s", job_url, exc)
+        return None
+    if not resp.ok:
+        return None
+    try:
+        payload = extract_inertia_payload(resp.text)
+    except JobsUnavailable:
+        return None
+    return (payload.get("props", {}).get("job") or {}).get("description")
+
+
+async def enrich_descriptions(client: httpx.AsyncClient, postings: list[dict[str, Any]]) -> None:
+    """Fetch descriptions for engineering postings only, concurrently.
+
+    Sales and ops descriptions almost never name an issue tracker, so restricting this
+    roughly halves the extra requests while keeping essentially all of the signal.
+    """
+    targets = [p for p in postings if is_engineering(p) and p.get("url")]
+    if not targets:
+        return
+    results = await asyncio.gather(
+        *(fetch_description(client, p["url"]) for p in targets), return_exceptions=True
+    )
+    for posting, result in zip(targets, results, strict=True):
+        if isinstance(result, str):
+            posting["description"] = result
 
 
 async def fetch_jobs(client: httpx.AsyncClient, slug: str) -> list[dict[str, Any]]:
@@ -69,7 +122,9 @@ async def fetch_jobs(client: httpx.AsyncClient, slug: str) -> list[dict[str, Any
         raise JobsUnavailable(f"HTTP {resp.status_code} for {slug}")
     payload = extract_inertia_payload(resp.text)
     postings = payload.get("props", {}).get("jobPostings") or []
-    return [_normalize_posting(p) for p in postings if p.get("id")]
+    normalized = [_normalize_posting(p) for p in postings if p.get("id")]
+    await enrich_descriptions(client, normalized)
+    return normalized
 
 
 def store_jobs(conn: sqlite3.Connection, company_id: int, postings: list[dict[str, Any]]) -> None:
@@ -85,8 +140,8 @@ def store_jobs(conn: sqlite3.Connection, company_id: int, postings: list[dict[st
     conn.executemany(
         """INSERT OR REPLACE INTO job_postings (yc_job_id, company_id, title, role, pretty_role,
                skills, salary_range, equity_range, min_experience, location, job_type, visa,
-               url, created_at_rel, last_active_rel, fetched_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               url, created_at_rel, last_active_rel, description, fetched_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         [
             (
                 p["yc_job_id"],
@@ -104,6 +159,7 @@ def store_jobs(conn: sqlite3.Connection, company_id: int, postings: list[dict[st
                 p["url"],
                 p["created_at_rel"],
                 p["last_active_rel"],
+                p.get("description"),
                 now,
             )
             for p in postings
@@ -147,6 +203,16 @@ async def get_jobs(
     postings = await fetch_jobs(client, slug)
     store_jobs(conn, company_id, postings)
     return load_jobs(conn, company_id), False
+
+
+def tools_from_jobs(postings: list[dict[str, Any]]) -> list[ToolHit]:
+    """Mine job descriptions for named tooling, attributing each hit to its posting."""
+    return merge_hits(
+        [
+            detect_tools(p.get("description") or "", source=p.get("title") or "role")
+            for p in postings
+        ]
+    )
 
 
 def stack_from_jobs(postings: list[dict[str, Any]]) -> list[dict[str, Any]]:

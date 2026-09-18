@@ -86,8 +86,18 @@ You brief an Atlassian account executive before they reach out to a prospect. Th
 is Jira, Confluence, and Rovo / the teamwork graph.
 
 You are given real scraped data about a Y Combinator company: directory facts, open job \
-postings with a curated skills array, publicly detectable tooling on their website, a \
-heuristic Atlassian-fit score with its per-signal breakdown, and recent news headlines.
+postings with a curated skills array, tooling named in the text of those job descriptions, \
+publicly detectable tooling on their website, a heuristic Atlassian-fit score with its \
+per-signal breakdown, third-party news headlines, and posts from the company's own blog.
+
+Evidence is not equal. Tooling named in a job description is the company stating its own \
+stack - treat it as the strongest signal you have. A website fingerprint is an inference \
+from public marketing HTML and is much weaker. Where they disagree, trust the job \
+description and say so.
+
+The tooling list is not exhaustive: it comes from a fixed catalog. If a job description \
+quote names a product that is not in the list - an issue tracker, wiki, source host, CI \
+system, service desk, on-call tool or knowledge search tool - call it out yourself.
 
 Rules you must follow:
 
@@ -163,6 +173,28 @@ def _fmt_news(articles: list[dict[str, Any]], limit: int = 12) -> str:
     )
 
 
+def _fmt_tools(tools: list[dict[str, Any]]) -> str:
+    """Tooling named in job descriptions - the company describing its own stack."""
+    if not tools:
+        return "No tooling named in job descriptions."
+    lines = []
+    for t in tools:
+        lines.append(
+            f"- {t['product']} ({t['category'].replace('_', ' ')}, {t['strength']})"
+            f'\n    quote: "{t["evidence"][:180]}"'
+            + (f"\n    from: {', '.join(t['sources'])}" if t.get("sources") else "")
+        )
+    return "\n".join(lines)
+
+
+def _fmt_posts(posts: list[dict[str, Any]], limit: int = 10) -> str:
+    if not posts:
+        return "No posts found on the company's own site."
+    return "\n".join(
+        f"- {p.get('title')} ({(p.get('published') or 'undated')[:10]})" for p in posts[:limit]
+    )
+
+
 def build_payload(
     company: dict[str, Any],
     jobs: list[dict[str, Any]],
@@ -170,6 +202,8 @@ def build_payload(
     fingerprint: dict[str, Any],
     score: dict[str, Any],
     articles: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
+    posts: list[dict[str, Any]] | None = None,
 ) -> str:
     """Assemble the grounded context. Kept pure so it can be tested without an API call."""
     stack_line = (
@@ -194,13 +228,19 @@ Description: {(company.get("long_description") or "")[:1200]}
 ## Aggregated tech stack (from job postings)
 {stack_line}
 
-## Publicly detected tooling (public surface only)
+## Tooling named in job descriptions (the company describing its own stack)
+{_fmt_tools(tools or [])}
+
+## Publicly detected tooling on their website (public surface only, weaker evidence)
 {_fmt_fingerprint(fingerprint)}
 
 ## {_fmt_score(score)}
 
-## Recent news
+## Recent news (third-party coverage)
 {_fmt_news(articles)}
+
+## The company's own blog / newsroom
+{_fmt_posts(posts or [])}
 """
 
 
