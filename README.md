@@ -142,6 +142,38 @@ HTTP if you would rather not leave the browser. Bump `RULES_VERSION` when you ch
 logic so stored scores stay comparable. Every score in the UI expands into a per-signal
 breakdown showing exactly which facts produced which points.
 
+## Prospect scan: finding the companies, not just checking one
+
+Looking companies up one at a time is the wrong shape for prospecting. The scan sweeps a
+whole universe, reads every company's job board, and ranks what comes back.
+
+```bash
+uv run scrape-test scan            # or press "Run scan" in the UI
+```
+
+**The ICP** lives in [`prospects/icp.py`](src/scrape_test/prospects/icp.py), tunable the
+same way the scoring weights are: AI-first, batch 2022 or later, team 10-200, currently
+hiring. Against the YC corpus that cuts 6,237 companies to about 225.
+
+**Two universes.** YC's directory has the metadata (batch, team size, tags) but only
+covers YC alumni. Hacker News' monthly "Who is hiring" threads cover the wider market
+through HN's public Algolia API - roughly 190 usable companies per thread, about 60% of
+them AI. HN carries no headcount, so those candidates are sized by their open-role count
+instead.
+
+**The ranking rests on positive evidence, not absence.** "Not yet an Atlassian customer"
+is the hardest thing to measure and absence proves nothing - a company that never mentions
+Jira might simply not have said. So a named competitor is the top signal: a company saying
+*"issue tracking with Linear"* has proven it buys tooling, has the coordination problem,
+and is not yours. A company naming no tooling at all is graded **no signal**, not
+prospect - otherwise thousands of unknowns bury the real leads. A stated Atlassian product
+is a hard stop: that is someone else's expansion conversation.
+
+**Coverage needed a fallback.** Only about a third of small YC companies run Greenhouse,
+Ashby or Lever - the rest hire through YC's own board. When no ATS is found for a YC
+company, the scan reads its YC postings instead, which took a sample from 3 scannable out
+of 10 to 20 out of 20.
+
 ## Technographics from any company's job board
 
 The YC directory is a narrow window. Every funded company publishes its whole job corpus
@@ -283,7 +315,7 @@ web/            index.html + app.js + style.css (vanilla, no build step)
 ## Development
 
 ```bash
-uv run pytest          # 157 tests (unit, async, ATS, tooling precision, LLM, env)
+uv run pytest          # 183 tests (unit, async, ATS, tooling precision, LLM, env)
 uv run ruff check src tests
 uv run mypy
 ```

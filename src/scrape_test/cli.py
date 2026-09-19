@@ -18,6 +18,7 @@ from .brief import (
 from .db import init_db, session
 from .http import make_client
 from .news import get_source
+from .prospects import latest_run, load_prospects, run_scan
 from .scoring import RULES_VERSION, compute_score
 from .scoring.score import rescore_all, store_score
 from .yc.directory import company_dict, refresh_directory, resolve
@@ -201,6 +202,29 @@ async def _cmd_brief(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _cmd_scan(args: argparse.Namespace) -> int:
+    """Sweep the ICP universe and rank prospects. Minutes of polite HTTP."""
+    init_db()
+    async with make_client() as client:
+        with session() as conn:
+            await refresh_directory(conn, client)
+        run_id = await run_scan(client, use_yc=not args.no_yc, hn_threads=args.hn_threads)
+    with session() as conn:
+        run = latest_run(conn) or {}
+        rows = load_prospects(conn, only_prospects=True, limit=args.limit)
+    print(
+        f"\nrun {run_id}: scanned {run.get('done', 0)}/{run.get('total', 0)}, "
+        f"{run.get('found', 0)} prospects\n"
+    )
+    for r in rows:
+        comp = ", ".join(
+            f"{c['product']}" for c in r["competitors"] if c.get("strength") == "stated"
+        ) or ", ".join(c["product"] for c in r["competitors"][:3]) or "-"
+        print(f"  {r['score']:5.1f}  {r['name'][:26]:26} {str(r['batch'] or r['source'])[:12]:12} "
+              f"roles={str(r['open_roles'] or '-'):>3}  {comp[:44]}")
+    return 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -231,6 +255,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--source", default="google_news", help="news backend")
     p.add_argument("--regenerate", action="store_true", help="bypass the cached brief")
     p.set_defaults(fn=_cmd_brief, is_async=True)
+
+    p = sub.add_parser("scan", help="sweep the ICP universe and rank prospects")
+    p.add_argument("--no-yc", action="store_true", help="skip the YC universe")
+    p.add_argument("--hn-threads", type=int, default=3, help="HN hiring threads to read")
+    p.add_argument("--limit", type=int, default=40)
+    p.set_defaults(fn=_cmd_scan, is_async=True)
 
     p = sub.add_parser("serve", help="run the web UI")
     p.add_argument("--host", default="127.0.0.1")

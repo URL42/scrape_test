@@ -40,6 +40,20 @@
 
 <div id="status" class="status" hidden></div>
 
+<section class="panel prospects" id="prospectpanel">
+  <h2>Prospect scan <span class="sub">AI-first companies using tooling that isn't Atlassian</span></h2>
+  <div class="panel-body">
+    <div class="scanbar">
+      <button type="button" id="scanbtn">Run scan</button>
+      <label class="scanopt"><input type="checkbox" id="scanyc" checked> YC universe</label>
+      <label class="scanopt">HN threads <input type="number" id="scanhn" value="3" min="0" max="12"></label>
+      <label class="scanopt"><input type="checkbox" id="showall"> show all verdicts</label>
+      <span id="scanprogress" class="toolsrc"></span>
+    </div>
+    <div id="prospects"><p class="empty">Run a scan to build the prospect list.</p></div>
+  </div>
+</section>
+
 <main class="grid">
   <section class="panel" id="ycpanel">
     <h2>Y Combinator <span class="sub">tech stack &amp; hiring signals</span></h2>

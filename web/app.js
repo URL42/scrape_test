@@ -76,6 +76,72 @@ function renderNews(news) {
   }).join("");
 }
 
+function verdictClass(v) {
+  return { "prospect": "good", "existing customer": "bad", "no signal": "muted" }[v] || "muted";
+}
+
+function renderProspects(d) {
+  const rows = d.prospects || [];
+  const counts = Object.entries(d.counts || {})
+    .map(([k, v]) => `<span class="chip">${esc(k)}<b>${v}</b></span>`).join("");
+  if (!rows.length) {
+    $("prospects").innerHTML = `<div class="chips">${counts}</div>
+      <p class="empty">No prospects yet. Run a scan, or tick "show all verdicts".</p>`;
+    return;
+  }
+  const body = rows.map((r) => {
+    const stated = (r.competitors || []).filter((c) => c.strength === "stated");
+    const comp = (stated.length ? stated : (r.competitors || []).slice(0, 3))
+      .map((c) => `<span class="chip ${c.strength === "stated" ? "strong" : "weak"}">${esc(c.product)}</span>`)
+      .join(" ") || "<span class='toolsrc'>—</span>";
+    const atl = (r.atlassian || []).map((a) => esc(a.product)).join(", ");
+    const quote = stated.length ? stated[0].evidence : ((r.competitors || [])[0] || {}).evidence;
+    return `<tr>
+      <td class="pscore">${(r.score || 0).toFixed(0)}</td>
+      <td>
+        <div class="pname">${esc(r.name)}</div>
+        <div class="toolsrc">${esc(r.batch || r.source)} · ${r.open_roles ?? "?"} roles · ${esc(r.board_provider || "—")}</div>
+      </td>
+      <td>${comp}${quote ? `<div class="toolev">“${esc(String(quote).slice(0, 130))}”</div>` : ""}</td>
+      <td>${atl ? `<span class="chip weak">${esc(atl)}</span>` : "<span class='toolsrc'>none</span>"}</td>
+      <td><span class="prio ${verdictClass(r.verdict)}">${esc(r.verdict || "")}</span></td>
+    </tr>`;
+  }).join("");
+  $("prospects").innerHTML = `<div class="chips" style="margin-bottom:10px">${counts}</div>
+    <table class="ptable"><thead><tr>
+      <th>Fit</th><th>Company</th><th>Competing tooling</th><th>Atlassian</th><th>Verdict</th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+}
+
+async function loadProspects() {
+  try {
+    const r = await fetch(`/api/prospects?only_prospects=${$("showall").checked ? "false" : "true"}`);
+    renderProspects(await r.json());
+  } catch (err) {
+    $("prospects").innerHTML = `<p class="empty">${esc(err.message || err)}</p>`;
+  }
+}
+
+async function pollScan() {
+  try {
+    const r = await fetch("/api/scan/status");
+    const d = await r.json();
+    const run = d.run;
+    if (run) {
+      const pct = run.total ? Math.round((run.done / run.total) * 100) : 0;
+      $("scanprogress").textContent =
+        `${run.status} · ${run.done}/${run.total} (${pct}%) · ${run.found} prospects` +
+        (run.current ? ` · ${run.current}` : "");
+    }
+    if (d.error) $("scanprogress").textContent = `failed: ${d.error}`;
+    await loadProspects();
+    if (d.running) { setTimeout(pollScan, 2500); }
+    else { $("scanbtn").disabled = false; $("scanbtn").textContent = "Run scan"; }
+  } catch {
+    $("scanbtn").disabled = false;
+  }
+}
+
 function toolRow(t) {
   return `<div class="tool ${esc(t.strength)}">
     <div class="toolhead">
@@ -507,4 +573,29 @@ $("searchform").addEventListener("submit", async (e) => {
   }
 });
 
+$("scanbtn").addEventListener("click", async () => {
+  const btn = $("scanbtn");
+  btn.disabled = true;
+  btn.textContent = "Scanning…";
+  $("scanprogress").textContent = "starting…";
+  const params = new URLSearchParams({
+    use_yc: $("scanyc").checked ? "true" : "false",
+    hn_threads: $("scanhn").value || "3",
+  });
+  try {
+    const r = await fetch(`/api/scan?${params}`, { method: "POST" });
+    if (!r.ok) {
+      const d = await r.json();
+      throw new Error(d.detail || `API returned ${r.status}`);
+    }
+    pollScan();
+  } catch (err) {
+    $("scanprogress").textContent = String(err.message || err);
+    btn.disabled = false;
+    btn.textContent = "Run scan";
+  }
+});
+$("showall").addEventListener("change", loadProspects);
+
 loadSources();
+loadProspects();

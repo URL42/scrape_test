@@ -100,6 +100,44 @@ CREATE TABLE IF NOT EXISTS briefs (
     created_at      REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS prospects (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,
+    domain          TEXT,
+    source          TEXT NOT NULL,
+    external_id     TEXT,
+    batch           TEXT,
+    team_size       INTEGER,
+    one_liner       TEXT,
+    in_profile      INTEGER NOT NULL DEFAULT 0,
+    reject_reason   TEXT,
+    board_provider  TEXT,
+    board_token     TEXT,
+    board_found_via TEXT,
+    open_roles      INTEGER,
+    atlassian       TEXT NOT NULL DEFAULT '[]',
+    competitors     TEXT NOT NULL DEFAULT '[]',
+    score           REAL,
+    verdict         TEXT,
+    reasons         TEXT NOT NULL DEFAULT '[]',
+    error           TEXT,
+    scanned_at      REAL,
+    UNIQUE(source, name, domain)
+);
+CREATE INDEX IF NOT EXISTS idx_prospects_score ON prospects(score DESC);
+
+CREATE TABLE IF NOT EXISTS scan_runs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    status          TEXT NOT NULL,          -- running | done | failed | cancelled
+    total           INTEGER NOT NULL DEFAULT 0,
+    done            INTEGER NOT NULL DEFAULT 0,
+    found           INTEGER NOT NULL DEFAULT 0,
+    current         TEXT,
+    error           TEXT,
+    started_at      REAL NOT NULL,
+    finished_at     REAL
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key             TEXT PRIMARY KEY,
     value           TEXT NOT NULL,

@@ -28,6 +28,8 @@ from .config import WEB_DIR
 from .db import get_meta, init_db, session
 from .http import make_client
 from .news import SOURCES, get_source
+from .prospects import latest_run, load_prospects, run_scan
+from .prospects.icp import PROSPECT_WEIGHTS
 from .scoring import RULES_VERSION, WEIGHTS, compute_score
 from .scoring.score import rescore_all, store_score
 from .yc.directory import company_dict, refresh_directory, resolve
@@ -133,6 +135,57 @@ async def _yc_block(company: str, refresh: bool) -> dict[str, Any]:
                 "posts": posts_cached,
             },
         }
+
+
+_scan_task: asyncio.Task[int] | None = None
+
+
+@app.post("/api/scan")
+async def start_scan(
+    hn_threads: int = Query(3, ge=0, le=12),
+    use_yc: bool = Query(True),
+) -> dict[str, Any]:
+    """Kick off a prospect sweep in the background.
+
+    Minutes of polite HTTP, so it runs as a task and the UI polls /api/scan/status.
+    """
+    global _scan_task
+    if _scan_task is not None and not _scan_task.done():
+        raise HTTPException(409, "A scan is already running.")
+
+    async def runner() -> int:
+        return await run_scan(client(), use_yc=use_yc, hn_threads=hn_threads)
+
+    _scan_task = asyncio.create_task(runner())
+    return {"started": True, "use_yc": use_yc, "hn_threads": hn_threads}
+
+
+@app.get("/api/scan/status")
+async def scan_status() -> dict[str, Any]:
+    with session() as conn:
+        run = latest_run(conn)
+    running = _scan_task is not None and not _scan_task.done()
+    failed = None
+    if _scan_task is not None and _scan_task.done():
+        exc = _scan_task.exception()
+        failed = str(exc)[:300] if exc else None
+    return {"run": run, "running": running, "error": failed}
+
+
+@app.get("/api/prospects")
+async def prospects(
+    only_prospects: bool = Query(True),
+    limit: int = Query(300, ge=1, le=2000),
+) -> dict[str, Any]:
+    with session() as conn:
+        rows = load_prospects(conn, only_prospects=only_prospects, limit=limit)
+        counts = {
+            r["verdict"]: r["n"]
+            for r in conn.execute(
+                "SELECT verdict, COUNT(*) AS n FROM prospects GROUP BY verdict"
+            )
+        }
+    return {"prospects": rows, "counts": counts, "weights": PROSPECT_WEIGHTS}
 
 
 @app.get("/api/technographics")
