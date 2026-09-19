@@ -60,7 +60,8 @@ button:disabled { opacity: .55; cursor: progress; }
   background: var(--accent-soft); font-size: 13.5px; }
 .status.error { background: color-mix(in srgb, var(--bad) 14%, transparent); }
 
-.grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; padding: 18px 24px; align-items: start; }
+.grid { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 18px; padding: 18px 24px; align-items: start; }
+@media (max-width: 1400px) { .grid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
 .panel h2 { margin: 0; padding: 14px 18px; border-bottom: 1px solid var(--border); font-size: 14px; letter-spacing: .01em; }
@@ -165,3 +166,9 @@ ul.postlist li:last-child { border-bottom: 0; }
 .launch { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 9px 11px; background: var(--bg); }
 .launchtitle { font-weight: 650; font-size: 14px; display: flex; gap: 10px; align-items: baseline; }
 .launchbody { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+
+/* ---- technographics ---- */
+.techhead { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.techcount { font-size: 26px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
+.techcount span { font-size: 12px; font-weight: 400; color: var(--muted); letter-spacing: 0; }
+.techboard { margin-top: 4px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }

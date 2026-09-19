@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .ats import ATSUnavailable, discover_board, fetch_board
 from .brief import (
     BriefUnavailable,
     active_provider,
@@ -33,6 +34,7 @@ from .yc.directory import company_dict, refresh_directory, resolve
 from .yc.fingerprint import get_fingerprint, load_fingerprint
 from .yc.jobs import get_jobs, load_jobs, stack_from_jobs, tools_from_jobs
 from .yc.site_news import get_company_posts, load_posts
+from .yc.tooling import detect_tools, merge_hits, split_atlassian
 
 log = logging.getLogger(__name__)
 _client: httpx.AsyncClient | None = None
@@ -131,6 +133,59 @@ async def _yc_block(company: str, refresh: bool) -> dict[str, Any]:
                 "posts": posts_cached,
             },
         }
+
+
+@app.get("/api/technographics")
+async def technographics(
+    domain: str = Query(..., min_length=3),
+    company: str = Query("", description="Company name, to suppress self-references"),
+    limit: int = Query(400, ge=1, le=2000),
+) -> JSONResponse:
+    """Technographics for any company, from its public job board.
+
+    Independent of YC: works for any company with a Greenhouse, Ashby or Lever board,
+    which is most funded startups. These are the platforms' own public embed endpoints -
+    no credentials, no bot-blocking - and they carry far more text than YC exposes.
+    """
+    board = await discover_board(client(), domain)
+    if board is None:
+        raise HTTPException(
+            404,
+            f"No Greenhouse, Ashby or Lever board found for {domain!r}. The company may "
+            "use another ATS, or link its board from a page we did not read.",
+        )
+    try:
+        postings = await fetch_board(client(), board)
+    except ATSUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    name = company or board.token
+    hits = merge_hits(
+        [
+            detect_tools(p.description, source=p.title[:40], company=name)
+            for p in postings[:limit]
+        ]
+    )
+    ours, theirs = split_atlassian(hits)
+    departments: dict[str, int] = {}
+    for p in postings:
+        departments[p.department or "Unspecified"] = (
+            departments.get(p.department or "Unspecified", 0) + 1
+        )
+
+    return JSONResponse({
+        "domain": domain,
+        "board": {
+            "provider": board.provider, "token": board.token,
+            "url": board.url, "found_via": board.found_via,
+        },
+        "job_count": len(postings),
+        "scanned": min(len(postings), limit),
+        "departments": dict(sorted(departments.items(), key=lambda kv: -kv[1])[:12]),
+        "atlassian": [h.as_dict() for h in ours],
+        "competitors": [h.as_dict() for h in theirs],
+        "postings": [p.as_dict() for p in postings[:40]],
+    })
 
 
 @app.post("/api/brief")

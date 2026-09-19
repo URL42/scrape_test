@@ -142,6 +142,31 @@ HTTP if you would rather not leave the browser. Bump `RULES_VERSION` when you ch
 logic so stored scores stay comparable. Every score in the UI expands into a per-signal
 breakdown showing exactly which facts produced which points.
 
+## Technographics from any company's job board
+
+The YC directory is a narrow window. Every funded company publishes its whole job corpus
+through an applicant tracking system, and the major ones expose **public, documented
+endpoints built for embedding job boards** - no credentials, no bot-blocking:
+
+| Company | Roles on YC | Roles via ATS |
+|---|---|---|
+| Stripe | 3 | **666** (Greenhouse) |
+| Vanta | 1 | **93** (Ashby) |
+| Ramp | not YC-listed | **148** (Ashby) |
+| Discord | not YC-listed | **46** (Greenhouse) |
+
+```bash
+curl "localhost:8000/api/technographics?domain=discord.com&company=Discord"
+```
+
+Or type a domain into the search box. Leave it blank and a YC company's own website is
+used, so the common case needs no extra typing.
+
+Discovery reads the careers page for an embedded board token - Vanta's exposes
+`api.ashbyhq.com/posting-api/job-board/vanta` - and falls back to guessing the token from
+the domain, which is how Stripe, Ramp and Discord resolve. Greenhouse, Ashby and Lever are
+supported; adding another is one module in [`ats/`](src/scrape_test/ats/).
+
 ## Tooling named in job descriptions
 
 The strongest signal here, and the reason job *detail* pages are fetched at all. The
@@ -159,10 +184,22 @@ from so you can judge it yourself. The catalog is in
 [`yc/tooling.py`](src/scrape_test/yc/tooling.py) and is a floor, not a ceiling: the brief
 is explicitly asked to flag products the catalog misses.
 
-**Precision is the hard part.** Several product names are ordinary English - *Linear*
-(linear algebra), *Monday* (the weekday), *Notion* (an idea), *Height*, *Guru*, *Harness*,
-*Shortcut*. Those require nearby tooling context and are checked against a false-friend
-list. The test suite asserts that ten such sentences produce zero detections.
+**Precision is the hard part**, and it got harder at ATS scale - 666 postings will bury a
+real signal in noise. Four classes of false positive are handled:
+
+- **Ordinary English.** *Linear* (linear algebra), *Monday* (the weekday), *Notion* (an
+  idea), *Height*, *Guru*, *Harness*, *Shortcut*. These need nearby tooling context and are
+  checked against a false-friend list; a test asserts ten such sentences detect nothing.
+- **The company's own name.** "Linear" appeared in 25 of Linear's own postings and
+  "Airtable" in 15 of Airtable's - boilerplate, now suppressed.
+- **Lists of examples.** *"Experience with project management tools such as Asana,
+  Monday.com, or Jira"* means the role needs *a* tracker, not that this company runs Jira.
+  Demoted to `mentioned`. Stripe's ten Jira hits are all of this kind.
+- **Integration lists.** *"integrates with Jira"* is their product connecting to it.
+
+A **migration is not an enumeration**: *"migrating from Jira to Linear"* names both tools
+deliberately, and is the single most interesting sentence a prospect can write, so both
+stay `stated`.
 
 Scoring trusts this over the website: a posting naming a competitor scores higher than a
 website hit, because the former is the company describing its own workflow and the latter
@@ -246,7 +283,7 @@ web/            index.html + app.js + style.css (vanilla, no build step)
 ## Development
 
 ```bash
-uv run pytest          # 118 tests (unit, async, tooling precision, confidence, LLM, env)
+uv run pytest          # 157 tests (unit, async, ATS, tooling precision, LLM, env)
 uv run ruff check src tests
 uv run mypy
 ```

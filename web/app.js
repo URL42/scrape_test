@@ -76,6 +76,67 @@ function renderNews(news) {
   }).join("");
 }
 
+function toolRow(t) {
+  return `<div class="tool ${esc(t.strength)}">
+    <div class="toolhead">
+      <span class="toolname">${esc(t.product)}</span>
+      <span class="toolcat">${esc(t.category.replace(/_/g, " "))}</span>
+      <span class="toolstrength ${esc(t.strength)}">${esc(t.strength)}</span>
+    </div>
+    <div class="toolev">“${esc(t.evidence)}”</div>
+    ${t.sources && t.sources.length
+      ? `<div class="toolsrc">${t.sources.length} posting(s): ${esc(t.sources.slice(0, 4).join(", "))}${t.sources.length > 4 ? "…" : ""}</div>`
+      : ""}
+  </div>`;
+}
+
+function renderTech(d) {
+  const el = $("tech");
+  if (d.error) { el.innerHTML = `<p class="empty">${esc(d.error)}</p>`; return; }
+  const depts = Object.entries(d.departments || {})
+    .map(([k, v]) => `<span class="chip">${esc(k)}<b>${v}</b></span>`).join("");
+  const boardUrl = safeUrl(d.board.url);
+  el.innerHTML = `
+    <div class="techhead">
+      <div>
+        <div class="techcount">${d.job_count.toLocaleString()} <span>open roles scanned</span></div>
+        <div class="techboard">
+          ${boardUrl ? `<a class="ext" href="${esc(boardUrl)}" target="_blank" rel="noopener noreferrer">${esc(d.board.provider)} / ${esc(d.board.token)} ↗</a>` : esc(d.board.provider)}
+          <span class="toolsrc">found via ${esc(d.board.found_via)}</span>
+        </div>
+      </div>
+    </div>
+    ${depts ? `<h4 class="section">Hiring by department</h4><div class="chips">${depts}</div>` : ""}
+    <h4 class="section">Atlassian footprint</h4>
+    ${d.atlassian.length
+      ? `<div class="tools">${d.atlassian.map(toolRow).join("")}</div>`
+      : `<p class="empty">No Atlassian product named in any posting.</p>`}
+    <h4 class="section">Competing / adjacent tooling</h4>
+    ${d.competitors.length
+      ? `<div class="tools">${d.competitors.map(toolRow).join("")}</div>`
+      : `<p class="empty">No competing tooling named.</p>`}
+    <p class="notice"><b>stated</b> means a posting says the company uses it.
+    <b>mentioned</b> means it appeared in a list of examples, an integration list, or in
+    passing — much weaker. Read the quote before trusting either.</p>`;
+}
+
+async function fetchTech(domain, companyName) {
+  if (!domain) {
+    $("tech").innerHTML = `<p class="empty">No domain to scan. Enter one above.</p>`;
+    return;
+  }
+  $("tech").innerHTML = `<p class="empty">Scanning ${esc(domain)}'s job board…</p>`;
+  const params = new URLSearchParams({ domain, company: companyName || "" });
+  try {
+    const r = await fetch(`/api/technographics?${params}`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || `API returned ${r.status}`);
+    renderTech(d);
+  } catch (err) {
+    $("tech").innerHTML = `<p class="empty">${esc(err.message || err)}</p>`;
+  }
+}
+
 function scoreColor(total) {
   if (total >= 55) return "var(--good)";
   if (total >= 30) return "var(--warn)";
@@ -434,6 +495,11 @@ $("searchform").addEventListener("submit", async (e) => {
     renderYC(d.yc);
     const cached = d.yc.cached ? ` · jobs ${d.yc.cached.jobs ? "cached" : "fetched"}, site ${d.yc.cached.fingerprint ? "cached" : "fetched"}` : "";
     setStatus(`${d.news.articles.length} articles${cached}`);
+    // Technographics run independently of YC: fall back to the YC website when the
+    // domain box is empty, so a YC company works with no extra typing.
+    const typed = $("domain").value.trim();
+    const fromYc = d.yc.found && d.yc.company.website ? d.yc.company.website : "";
+    fetchTech(typed || fromYc, d.yc.found ? d.yc.company.name : company);
   } catch (err) {
     setStatus(String(err.message || err), true);
   } finally {

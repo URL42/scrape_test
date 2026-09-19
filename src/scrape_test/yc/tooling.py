@@ -240,7 +240,33 @@ CONTEXT_TERMS = (
     "collaborate",
     "manage",
     "product management",
+    # Migration and replacement phrasing: "moving off Jira" is a strong usage signal,
+    # and it is exactly the moment worth a sales conversation.
+    "migrat",
+    "moved to",
+    "moved off",
+    "moving off",
+    "switch",
+    "replace",
 )
+
+# Phrasing that frames a list of examples rather than a statement of use. "Experience
+# with project management tools such as Asana, Monday.com, or Jira" says the role needs
+# some tracker, not that this company runs Jira.
+ENUMERATION_MARKERS = (
+    "such as", "e.g.", "eg.", "for example", "like ", "including", "similar to",
+    "or similar", "and/or", "one of", "any of", "tools like", "platforms like",
+)
+
+# Phrasing that means "our product connects to this", not "we run this internally".
+INTEGRATION_MARKERS = (
+    "integrat", "connect to", "connects to", "connector", "plug into", "plugs into",
+    "sync with", "syncs with", "works with", "supported platform", "ecosystem (",
+    "across platforms", "data source", "import from", "export to",
+)
+
+# Two or more catalog products close together is a list of examples, not a statement.
+ENUMERATION_PROXIMITY = 60
 
 # Phrasing that shows the company states this is what they use, rather than a passing
 # mention. Used to grade evidence strength.
@@ -256,6 +282,15 @@ USAGE_PATTERNS = (
     r"\bmanaged (?:in|with)\b",
     r"\bdocumented (?:in|with)\b",
     r"\bhosted (?:in|on)\b",
+    r"\blives? (?:in|on)\b",
+    r"\bkept (?:in|on)\b",
+    r"\bstored (?:in|on)\b",
+    r"\bruns? on\b",
+    r"\bwe(?:'re| are) on\b",
+    r"\bmigrat\w+ (?:to|from|off)\b",
+    r"\bmoving (?:off|from|to|onto)\b",
+    r"\bswitch\w* (?:from|to|off)\b",
+    r"\bmoved (?:to|off)\b",
     r"\bexperience with\b",
     r"\bfamiliarity with\b",
     r"\bproficiency (?:in|with)\b",
@@ -304,11 +339,66 @@ _COMPILED: dict[tuple[str, str], list[re.Pattern[str]]] = {
 }
 
 
-def detect_tools(text: str, *, source: str = "") -> list[ToolHit]:
-    """Find tooling named in free text, with the surrounding sentence as evidence."""
+def _self_names(company: str | None) -> set[str]:
+    """Tokens that are the company talking about itself.
+
+    Linear's own postings say "Linear" 25 times and Airtable's say "Airtable" 15 times -
+    boilerplate, not tooling. Without this the loudest hit for any company that shares a
+    name with a product is itself.
+    """
+    if not company:
+        return set()
+    name = company.strip().lower()
+    out = {name}
+    out.add(re.sub(r"[^a-z0-9]+", "", name))
+    first = name.split()[0] if name.split() else ""
+    if len(first) > 2:
+        out.add(first)
+    return {n for n in out if n}
+
+
+TRANSITION_MARKERS = ("migrat", "moving off", "moved off", "moving from", "moved from",
+                      "switching from", "switched from", "replacing", "replaced")
+
+
+def _is_enumeration(window_lower: str, needle: str) -> bool:
+    """True when the match sits in a list of example tools rather than a claim of use."""
+    # "migrating from Jira to Linear" names two tools on purpose - both are real, and the
+    # transition itself is the most interesting signal there is. Not an enumeration.
+    if any(m in window_lower for m in TRANSITION_MARKERS):
+        return False
+    if any(marker in window_lower for marker in ENUMERATION_MARKERS):
+        return True
+    idx = window_lower.find(needle)
+    if idx == -1:
+        return False
+    near = window_lower[
+        max(0, idx - ENUMERATION_PROXIMITY) : idx + len(needle) + ENUMERATION_PROXIMITY
+    ]
+    others = 0
+    for products in CATALOG.values():
+        for aliases in products.values():
+            for alias in aliases:
+                if alias != needle and alias in near:
+                    others += 1
+                    break
+            else:
+                continue
+            break
+    return others >= 1
+
+
+def detect_tools(
+    text: str, *, source: str = "", company: str | None = None
+) -> list[ToolHit]:
+    """Find tooling named in free text, with the surrounding sentence as evidence.
+
+    `company` suppresses the company's own name, which otherwise dominates its postings.
+    """
     if not text:
         return []
     lowered = text.lower()
+    self_names = _self_names(company)
     hits: dict[str, ToolHit] = {}
 
     for (category, product), patterns in _COMPILED.items():
@@ -318,6 +408,12 @@ def detect_tools(text: str, *, source: str = "") -> list[ToolHit]:
                 end = min(len(text), match.end() + CONTEXT_WINDOW)
                 window = text[start:end]
                 window_lower = window.lower()
+
+                # The company talking about itself, not about its tooling.
+                if self_names and product.lower() in self_names:
+                    continue
+                if self_names and re.sub(r"[^a-z0-9]+", "", product.lower()) in self_names:
+                    continue
 
                 if product in AMBIGUOUS:
                     span_lo = max(0, match.start() - 30)
@@ -333,6 +429,16 @@ def detect_tools(text: str, *, source: str = "") -> list[ToolHit]:
                     if any(re.search(p, window_lower) for p in USAGE_PATTERNS)
                     else "mentioned"
                 )
+                # Two demotions, both cases where the words around the match mean
+                # something other than "we run this":
+                #   "tools such as Asana, Monday.com, or Jira" - a list of examples, so
+                #   the role needs *a* tracker, not this one.
+                #   "integrates with Jira" - their product connects to it.
+                if strength == "stated" and (
+                    _is_enumeration(window_lower, match.group(0).lower())
+                    or any(m in window_lower for m in INTEGRATION_MARKERS)
+                ):
+                    strength = "mentioned"
                 existing = hits.get(product)
                 if existing is None or (existing.strength == "mentioned" and strength == "stated"):
                     hits[product] = ToolHit(

@@ -24,6 +24,10 @@
     <label for="context">Context <span class="hint">refines the news query</span></label>
     <input id="context" name="context" placeholder="funding, fintech infrastructure" autocomplete="off">
   </div>
+  <div class="field grow">
+    <label for="domain">Domain <span class="hint">technographics; blank = use YC website</span></label>
+    <input id="domain" name="domain" placeholder="stripe.com" autocomplete="off">
+  </div>
   <div class="field">
     <label for="source">News source</label>
     <select id="source" name="source"></select>
@@ -40,6 +44,11 @@
   <section class="panel" id="ycpanel">
     <h2>Y Combinator <span class="sub">tech stack &amp; hiring signals</span></h2>
     <div id="yc" class="panel-body"><p class="empty">Search a company to begin.</p></div>
+  </section>
+
+  <section class="panel" id="techpanel">
+    <h2>Technographics <span class="sub">from the company's public job board</span></h2>
+    <div id="tech" class="panel-body"><p class="empty">Search to scan a job board.</p></div>
   </section>
 
   <section class="panel" id="newspanel">
