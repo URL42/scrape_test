@@ -19,11 +19,13 @@ import httpx
 
 from ..ats import ATSUnavailable, discover_board, fetch_board
 from ..db import session
+from ..extract.tooling import detect_tools, merge_hits, split_atlassian
 from ..http import fetch
 from ..scoring.products import lead_product, priority, product_fit
 from ..scoring.timing import timing_score, timing_signals
 from ..whatsnew import funding_age_for, recently_funded
-from ..yc.tooling import detect_tools, merge_hits, split_atlassian
+from ..yc.directory import resolve as resolve_yc
+from ..yc.jobs import get_jobs
 from .icp import (
     WATCHLIST_RESCAN_DAYS,
     Candidate,
@@ -264,8 +266,6 @@ async def resolve_domain(client: httpx.AsyncClient, name: str) -> str | None:
     rest are probed against a handful of common TLDs, which is how most startups are
     reachable.
     """
-    from ..yc.directory import resolve as resolve_yc
-
     with session() as conn:
         row, _suggestions = resolve_yc(conn, name)
     if row and row["website"]:
@@ -289,8 +289,6 @@ async def _yc_fallback_texts(
     client: httpx.AsyncClient, c: Candidate
 ) -> list[tuple[str, str]]:
     """Job text from YC's own board, for companies with no ATS of their own."""
-    from ..yc.jobs import get_jobs
-
     try:
         with session() as conn:
             row = conn.execute(

@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-ENV_FILE = PROJECT_ROOT / ".env"  # loaded in __init__.py, the real import chokepoint
 DATA_DIR = Path(os.environ.get("SCRAPE_TEST_DATA", PROJECT_ROOT / "data"))
 DB_PATH = DATA_DIR / "scrape_test.db"
 WEB_DIR = PROJECT_ROOT / "web"
@@ -39,8 +38,6 @@ TTL_POSTS = 24 * 3600
 
 YC_DIRECTORY_URL = "https://yc-oss.github.io/api/companies/all.json"
 YC_COMPANY_URL = "https://www.ycombinator.com/companies/{slug}"
-TTL_YC_NEWS = 24 * 3600
-YC_JOBS_URL = "https://www.ycombinator.com/companies/{slug}/jobs"
 
 
 def ensure_dirs() -> None:

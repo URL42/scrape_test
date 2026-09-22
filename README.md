@@ -335,18 +335,37 @@ chip in the UI to see the exact evidence that produced it.
 
 ## Layout
 
+Dependencies run one way, and the two packages that matter most depend on nothing:
+
 ```
 src/scrape_test/
-  config.py     tunables: throttles, TTLs, endpoints
-  db.py         SQLite schema and helpers
-  http.py       async client: per-host throttle, retries, optional body cap
-  news/         base.py (protocol) + google_news.py + gdelt.py
-  yc/           directory.py, jobs.py, fingerprint.py
-  scoring/      rules.py (tune this) + score.py (applies it)
-  api.py        FastAPI
-  cli.py        refresh · lookup · rescore · serve
+  scoring/      rules · timing · products · score      → imports nothing internal
+  llm/          deepseek · claude · base               → imports nothing internal
+  http.py       async client: per-host throttle, retries, proxy-aware
+  db.py         SQLite schema, migrations, session
+  config.py     throttles, TTLs, endpoints
+
+  extract/      tooling (text → products) · fingerprint (site → tech)
+  feeds/        discovery chain: declared feed → paths → sitemap → scrape
+  ats/          greenhouse · ashby · lever · discover
+  news/         google_news · gdelt (switchable behind one protocol)
+
+  yc/           directory · jobs                       ← YC-specific only
+  whatsnew/     sources · classify · dates · digest
+  prospects/    icp (tune this) · sources · scan
+  search.py     idea (FTS5) and investor modes
+  brief.py      the "so what" brief
+  rescore.py    score persistence and re-ranking
+
+  routes/       company · digest · scan · search · deps
+  api.py        app wiring only (75 lines)
+  cli.py        refresh · lookup · scan · brief · rescore · serve
 web/            index.html + app.js + style.css (vanilla, no build step)
 ```
+
+`scoring/` and `llm/` import nothing from the rest of the project. That is the property
+worth protecting: it is why `rescore` runs in under a second, why the rules are testable
+without a network, and why changing a weight is safe.
 
 ## Development
 

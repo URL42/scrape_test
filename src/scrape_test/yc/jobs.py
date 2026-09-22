@@ -25,8 +25,9 @@ import httpx
 
 from ..config import TTL_JOBS, YC_COMPANY_URL
 from ..db import is_fresh
+from ..extract.tooling import ToolHit, detect_tools, merge_hits
+from ..feeds.discover import load_posts, store_yc_items
 from ..http import fetch
-from .tooling import ToolHit, detect_tools, merge_hits
 
 log = logging.getLogger(__name__)
 
@@ -275,8 +276,6 @@ async def get_jobs(
     force: bool = False,
 ) -> tuple[list[dict[str, Any]], bool, list[dict[str, Any]]]:
     """Return (postings, from_cache, yc_items). Write-through cache keyed on TTL_JOBS."""
-    from .site_news import load_posts, store_yc_items
-
     if not force and is_fresh(jobs_cache_age(conn, company_id), TTL_JOBS):
         return (
             load_jobs(conn, company_id),

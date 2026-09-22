@@ -16,15 +16,15 @@ from .brief import (
     store_brief,
 )
 from .db import init_db, session
+from .extract.fingerprint import get_fingerprint
+from .feeds.discover import get_company_posts
 from .http import make_client
 from .news import get_source
 from .prospects import latest_run, load_prospects, run_scan
+from .rescore import rescore_all, store_score
 from .scoring import RULES_VERSION, compute_score
-from .scoring.score import rescore_all, store_score
 from .yc.directory import company_dict, refresh_directory, resolve
-from .yc.fingerprint import get_fingerprint
 from .yc.jobs import get_jobs, stack_from_jobs, tools_from_jobs
-from .yc.site_news import get_company_posts
 
 
 async def _cmd_refresh(args: argparse.Namespace) -> int:

@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import pytest
 
-from scrape_test.scoring.score import compute_score
-from scrape_test.yc.tooling import (
+from scrape_test.extract.tooling import (
     detect_tools,
     merge_hits,
     split_atlassian,
 )
+from scrape_test.scoring.score import compute_score
 
 
 class TestFalsePositives:

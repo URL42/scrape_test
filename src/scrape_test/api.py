@@ -1,457 +1,50 @@
-"""FastAPI app: one lookup endpoint that fans out to news and YC in parallel."""
+"""FastAPI application: wiring only.
+
+Every endpoint lives in `routes/`. This module owns the app's lifecycle - one shared
+HTTP client, the database schema, the startup directory pull - and mounts the front end.
+"""
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
 from contextlib import asynccontextmanager
 from typing import Any
 
-import httpx
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .ats import ATSUnavailable, discover_board, fetch_board
-from .brief import (
-    BriefUnavailable,
-    active_provider,
-    build_payload,
-    credentials_available,
-    generate_brief,
-    load_brief,
-    payload_hash,
-    store_brief,
-)
 from .config import WEB_DIR
-from .db import get_meta, init_db, session
+from .db import init_db, session
 from .http import make_client
-from .news import SOURCES, get_source
-from .prospects import latest_run, load_prospects, run_scan
-from .prospects.icp import PROSPECT_WEIGHTS
-from .prospects.scan import due_for_rescan
-from .scoring import RULES_VERSION, WEIGHTS, compute_score
-from .scoring.products import lead_product, priority, product_fit
-from .scoring.score import rescore_all, store_score
-from .scoring.timing import timing_score, timing_signals
-from .search import ensure_index, idea_search, investor_search, list_investors
-from .whatsnew import KNOWN_GAPS, build_digest, load_digest, recently_funded, store_digest
-from .yc.directory import company_dict, refresh_directory, resolve
-from .yc.fingerprint import get_fingerprint, load_fingerprint
-from .yc.jobs import get_jobs, load_jobs, stack_from_jobs, tools_from_jobs
-from .yc.site_news import get_company_posts, load_posts
-from .yc.tooling import detect_tools, merge_hits, split_atlassian
+from .routes import company, digest, scan, search
+from .routes.deps import set_client
+from .yc.directory import refresh_directory
 
 log = logging.getLogger(__name__)
-_client: httpx.AsyncClient | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _client
     init_db()
-    _client = make_client()
-    # Make sure the directory is populated before the first lookup; it is one request.
+    client = make_client()
+    set_client(client)
+    # Populate the directory before the first lookup; it is a single request.
     with session() as conn:
         try:
-            await refresh_directory(conn, _client)
+            await refresh_directory(conn, client)
         except Exception as exc:  # noqa: BLE001 - startup should not hard-fail offline
             log.warning("directory refresh failed at startup: %s", exc)
     yield
-    await _client.aclose()
+    set_client(None)
+    await client.aclose()
 
 
 app = FastAPI(title="scrape-test", lifespan=lifespan)
-
-
-def client() -> httpx.AsyncClient:
-    if _client is None:
-        raise HTTPException(503, "HTTP client not ready")
-    return _client
-
-
-async def _news_block(company: str, context: str, source_key: str, limit: int) -> dict[str, Any]:
-    try:
-        source = get_source(source_key)
-    except KeyError as exc:
-        return {"source": source_key, "error": str(exc), "articles": []}
-    try:
-        articles = await source.search(client(), company, context, limit=limit)
-        return {
-            "source": source.key,
-            "label": source.label,
-            "note": source.note,
-            "query": source.build_query(company, context),
-            "articles": [a.as_dict() for a in articles],
-            "error": None,
-        }
-    except Exception as exc:  # noqa: BLE001 - one source failing must not kill the lookup
-        log.warning("news source %s failed: %s", source_key, exc)
-        return {"source": source_key, "label": source.label, "articles": [], "error": str(exc)}
-
-
-async def _yc_block(company: str, refresh: bool) -> dict[str, Any]:
-    with session() as conn:
-        row, suggestions = resolve(conn, company)
-        if row is None:
-            return {
-                "found": False,
-                "suggestions": suggestions,
-                "message": f"{company!r} is not in the YC directory - showing news only.",
-            }
-        c = company_dict(row)
-        try:
-            jobs, jobs_cached, yc_items = await get_jobs(
-                conn, client(), c["id"], c["slug"], force=refresh
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("jobs fetch failed for %s: %s", c["slug"], exc)
-            jobs, jobs_cached, yc_items = [], False, []
-        fp, fp_cached = await get_fingerprint(conn, client(), c["id"], c["website"], force=refresh)
-        try:
-            posts, posts_cached, posts_via = await get_company_posts(
-                conn, client(), c["id"], c["website"], force=refresh
-            )
-        except Exception as exc:  # noqa: BLE001 - own-site news is a bonus, never fatal
-            log.warning("company posts failed for %s: %s", c["slug"], exc)
-            posts, posts_cached, posts_via = [], False, str(exc)[:120]
-
-        tools = [t.as_dict() for t in tools_from_jobs(jobs, yc_items)]
-        score = compute_score(c, jobs, fp, tools)
-        store_score(conn, c["id"], score)
-
-        fits = product_fit(jobs, tools, c)
-        lead, lead_score = lead_product(fits)
-        signals = timing_signals(jobs, open_roles=len(jobs))
-        t_score = timing_score(signals)
-
-        return {
-            "found": True,
-            "company": c,
-            "yc_url": f"https://www.ycombinator.com/companies/{c['slug']}",
-            "jobs": jobs,
-            "stack": stack_from_jobs(jobs),
-            "tools": tools,
-            "fingerprint": fp,
-            "posts": posts,
-            "posts_via": posts_via,
-            "yc_news": [i for i in yc_items if i["source"] == "yc_news"],
-            "yc_launches": [i for i in yc_items if i["source"] == "yc_launch"],
-            "score": score.as_dict(),
-            "products": fits,
-            "lead_product": lead,
-            "timing": {"score": t_score, "signals": signals},
-            "priority": priority(lead_score, t_score),
-            "cached": {
-                "jobs": jobs_cached,
-                "fingerprint": fp_cached,
-                "posts": posts_cached,
-            },
-        }
-
-
-_scan_task: asyncio.Task[int] | None = None
-_digest_task: asyncio.Task[int] | None = None
-
-
-@app.post("/api/digest/refresh")
-async def refresh_digest(
-    kinds: str = Query("vc,press"),
-    regions: str = Query(""),
-) -> dict[str, Any]:
-    """Pull every curated VC and press feed, classify, store. Takes ~15 seconds."""
-    global _digest_task
-    if _digest_task is not None and not _digest_task.done():
-        raise HTTPException(409, "A digest refresh is already running.")
-
-    kind_tuple = tuple(k.strip() for k in kinds.split(",") if k.strip())
-    region_tuple = tuple(r.strip() for r in regions.split(",") if r.strip())
-
-    async def runner() -> int:
-        items = await build_digest(client(), kinds=kind_tuple, regions=region_tuple)
-        with session() as conn:
-            return store_digest(conn, items)
-
-    _digest_task = asyncio.create_task(runner())
-    return {"started": True, "kinds": kind_tuple, "regions": region_tuple}
-
-
-@app.get("/api/digest")
-async def digest(
-    tag: str = Query(""),
-    funded_only: bool = Query(False),
-    limit: int = Query(120, ge=1, le=500),
-) -> dict[str, Any]:
-    running = _digest_task is not None and not _digest_task.done()
-    with session() as conn:
-        items = load_digest(conn, tag=tag or None, funded_only=funded_only, limit=limit)
-        funded = recently_funded(conn)
-        counts = {
-            r["source_kind"]: r["n"]
-            for r in conn.execute(
-                "SELECT source_kind, COUNT(*) AS n FROM digest_items GROUP BY source_kind"
-            )
-        }
-    return {
-        "items": items, "funded_companies": funded, "counts": counts,
-        "running": running, "known_gaps": list(KNOWN_GAPS),
-    }
-
-
-@app.post("/api/scan")
-async def start_scan(
-    hn_threads: int = Query(3, ge=0, le=12),
-    use_yc: bool = Query(True),
-) -> dict[str, Any]:
-    """Kick off a prospect sweep in the background.
-
-    Minutes of polite HTTP, so it runs as a task and the UI polls /api/scan/status.
-    """
-    global _scan_task
-    if _scan_task is not None and not _scan_task.done():
-        raise HTTPException(409, "A scan is already running.")
-
-    async def runner() -> int:
-        return await run_scan(client(), use_yc=use_yc, hn_threads=hn_threads)
-
-    _scan_task = asyncio.create_task(runner())
-    return {"started": True, "use_yc": use_yc, "hn_threads": hn_threads}
-
-
-@app.get("/api/scan/status")
-async def scan_status() -> dict[str, Any]:
-    with session() as conn:
-        run = latest_run(conn)
-    running = _scan_task is not None and not _scan_task.done()
-    failed = None
-    if _scan_task is not None and _scan_task.done():
-        exc = _scan_task.exception()
-        failed = str(exc)[:300] if exc else None
-    return {"run": run, "running": running, "error": failed}
-
-
-@app.get("/api/prospects")
-async def prospects(
-    only_prospects: bool = Query(True),
-    verdict: str = Query(""),
-    limit: int = Query(300, ge=1, le=2000),
-) -> dict[str, Any]:
-    with session() as conn:
-        rows = load_prospects(
-            conn, only_prospects=only_prospects, verdict=verdict or None, limit=limit
-        )
-        due = due_for_rescan(conn)
-        counts = {
-            r["verdict"]: r["n"]
-            for r in conn.execute(
-                "SELECT verdict, COUNT(*) AS n FROM prospects GROUP BY verdict"
-            )
-        }
-    return {
-        "prospects": rows, "counts": counts, "weights": PROSPECT_WEIGHTS,
-        "due_for_rescan": len(due),
-    }
-
-
-@app.get("/api/search/idea")
-async def search_idea(
-    q: str = Query(..., min_length=2),
-    limit: int = Query(40, ge=1, le=200),
-) -> dict[str, Any]:
-    """Companies matching a concept, ranked by BM25 over their own descriptions."""
-    with session() as conn:
-        results = idea_search(conn, q, limit=limit)
-    return {"query": q, "results": results, "count": len(results)}
-
-
-@app.get("/api/search/investors")
-async def search_investors() -> dict[str, Any]:
-    with session() as conn:
-        return {"investors": list_investors(conn)}
-
-
-@app.get("/api/search/investor")
-async def search_investor(
-    name: str = Query(..., min_length=2),
-    limit: int = Query(60, ge=1, le=200),
-) -> dict[str, Any]:
-    """One fund's announcements, and the companies they recently backed."""
-    with session() as conn:
-        return investor_search(conn, name, limit=limit)
-
-
-@app.post("/api/search/reindex")
-async def search_reindex() -> dict[str, Any]:
-    with session() as conn:
-        return {"indexed": ensure_index(conn, rebuild=True)}
-
-
-@app.get("/api/technographics")
-async def technographics(
-    domain: str = Query(..., min_length=3),
-    company: str = Query("", description="Company name, to suppress self-references"),
-    limit: int = Query(400, ge=1, le=2000),
-) -> JSONResponse:
-    """Technographics for any company, from its public job board.
-
-    Independent of YC: works for any company with a Greenhouse, Ashby or Lever board,
-    which is most funded startups. These are the platforms' own public embed endpoints -
-    no credentials, no bot-blocking - and they carry far more text than YC exposes.
-    """
-    board = await discover_board(client(), domain)
-    if board is None:
-        raise HTTPException(
-            404,
-            f"No Greenhouse, Ashby or Lever board found for {domain!r}. The company may "
-            "use another ATS, or link its board from a page we did not read.",
-        )
-    try:
-        postings = await fetch_board(client(), board)
-    except ATSUnavailable as exc:
-        raise HTTPException(502, str(exc)) from exc
-
-    name = company or board.token
-    hits = merge_hits(
-        [
-            detect_tools(p.description, source=p.title[:40], company=name)
-            for p in postings[:limit]
-        ]
-    )
-    ours, theirs = split_atlassian(hits)
-    departments: dict[str, int] = {}
-    for p in postings:
-        departments[p.department or "Unspecified"] = (
-            departments.get(p.department or "Unspecified", 0) + 1
-        )
-
-    return JSONResponse({
-        "domain": domain,
-        "board": {
-            "provider": board.provider, "token": board.token,
-            "url": board.url, "found_via": board.found_via,
-        },
-        "job_count": len(postings),
-        "scanned": min(len(postings), limit),
-        "departments": dict(sorted(departments.items(), key=lambda kv: -kv[1])[:12]),
-        "atlassian": [h.as_dict() for h in ours],
-        "competitors": [h.as_dict() for h in theirs],
-        "postings": [p.as_dict() for p in postings[:40]],
-    })
-
-
-@app.post("/api/brief")
-async def brief(
-    company: str = Query(..., min_length=1),
-    context: str = Query(""),
-    source: str = Query("google_news"),
-    regenerate: bool = Query(False),
-) -> JSONResponse:
-    """Generate the 'so what' brief for one company.
-
-    On demand only - each generation costs money, so it never rides along with a lookup.
-    Cached against a hash of its own inputs; only `regenerate` forces a new call.
-    """
-    with session() as conn:
-        row, suggestions = resolve(conn, company)
-        if row is None:
-            raise HTTPException(404, f"{company!r} is not in the YC directory.")
-        c = company_dict(row)
-
-        jobs = load_jobs(conn, c["id"])
-        fp = load_fingerprint(conn, c["id"]) or {}
-        posts = load_posts(conn, c["id"])
-        yc_items = load_posts(conn, c["id"], sources=("yc_news", "yc_launch"))
-        tools = [t.as_dict() for t in tools_from_jobs(jobs, yc_items)]
-        score = compute_score(c, jobs, fp, tools).as_dict()
-
-    news = await _news_block(company, context, source, limit=12)
-    payload = build_payload(
-        c,
-        jobs,
-        stack_from_jobs(jobs),
-        fp,
-        score,
-        news["articles"],
-        tools=tools,
-        posts=posts,
-    )
-    digest = payload_hash(payload)
-
-    if not regenerate:
-        with session() as conn:
-            cached = load_brief(conn, c["id"], digest)
-        if cached:
-            return JSONResponse({"company": c["name"], **cached})
-
-    try:
-        result = await generate_brief(payload)
-    except BriefUnavailable as exc:
-        raise HTTPException(503, str(exc)) from exc
-
-    with session() as conn:
-        store_brief(conn, c["id"], digest, result)
-
-    return JSONResponse(
-        {
-            "company": c["name"],
-            "brief": result.model_dump(),
-            "model": active_provider().model,
-            "created_at": time.time(),
-            "cached": False,
-        }
-    )
-
-
-@app.get("/api/sources")
-async def sources() -> dict[str, Any]:
-    with session() as conn:
-        count = get_meta(conn, "directory_count", 0)
-        fetched = get_meta(conn, "directory_fetched_at")
-    return {
-        "news_sources": [
-            {"key": s.key, "label": s.label, "note": s.note} for s in SOURCES.values()
-        ],
-        "directory": {"companies": count, "fetched_at": fetched},
-        "rules_version": RULES_VERSION,
-        "weights": WEIGHTS,
-        "brief": {
-            "available": credentials_available(),
-            "provider": active_provider().label,
-            "model": active_provider().model,
-        },
-    }
-
-
-@app.get("/api/lookup")
-async def lookup(
-    company: str = Query(..., min_length=1),
-    context: str = Query(""),
-    source: str = Query("google_news"),
-    limit: int = Query(20, ge=1, le=100),
-    refresh: bool = Query(False),
-) -> JSONResponse:
-    """One company in, news + YC intelligence out. Both halves run concurrently."""
-    # Both halves share the one event-loop-bound httpx client, so they run as concurrent
-    # tasks rather than in threads - a second event loop would not be able to use it.
-    # The sqlite calls inside the YC half are local-file and short enough to inline.
-    news, yc = await asyncio.gather(
-        _news_block(company, context, source, limit),
-        _yc_block(company, refresh),
-    )
-    return JSONResponse({"query": {"company": company, "context": context}, "news": news, "yc": yc})
-
-
-@app.post("/api/rescore")
-def rescore() -> dict[str, Any]:
-    """Recompute every cached score with the current weights. Never touches the network.
-
-    Deliberately a sync `def`: FastAPI runs those on the threadpool, whereas an `async def`
-    full of blocking sqlite would freeze every other request for the length of the sweep.
-    """
-    with session() as conn:
-        updated = rescore_all(conn)
-    return {"rescored": updated, "rules_version": RULES_VERSION}
+app.include_router(company.router)
+app.include_router(digest.router)
+app.include_router(scan.router)
+app.include_router(search.router)
 
 
 class NoCacheStatic(StaticFiles):

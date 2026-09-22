@@ -8,6 +8,7 @@ from datetime import UTC
 
 import pytest
 
+from scrape_test.extract.fingerprint import detect
 from scrape_test.news.base import context_terms
 from scrape_test.news.google_news import GoogleNewsSource, _useful_summary
 from scrape_test.scoring.rules import (
@@ -17,7 +18,6 @@ from scrape_test.scoring.rules import (
 )
 from scrape_test.scoring.score import compute_score
 from scrape_test.yc.directory import normalize
-from scrape_test.yc.fingerprint import detect
 from scrape_test.yc.jobs import extract_inertia_payload
 
 

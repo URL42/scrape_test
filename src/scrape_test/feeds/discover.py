@@ -32,6 +32,7 @@ from selectolax.parser import HTMLParser
 
 from ..config import TTL_POSTS
 from ..db import is_fresh
+from ..extract.fingerprint import normalize_url
 from ..http import FetchError, fetch
 
 log = logging.getLogger(__name__)
@@ -269,8 +270,6 @@ async def fetch_company_posts(
     client: httpx.AsyncClient, website: str | None, *, homepage_html: str | None = None
 ) -> tuple[list[Post], str]:
     """Return (posts, how_we_found_them)."""
-    from .fingerprint import normalize_url
-
     base = normalize_url(website)
     if not base:
         return [], "no website on file"

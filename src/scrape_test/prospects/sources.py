@@ -18,7 +18,7 @@ from typing import Any
 import httpx
 
 from ..http import FetchError, fetch
-from .icp import Candidate, from_yc_row, is_ai_first
+from .icp import REQUIRE_ACTIVE, Candidate, from_yc_row, is_ai_first
 
 log = logging.getLogger(__name__)
 
@@ -41,9 +41,13 @@ SKIP_HOSTS = (
 
 
 def yc_candidates(conn: sqlite3.Connection) -> list[Candidate]:
-    """Every active YC company, unfiltered. The ICP filter is applied separately so the
-    rejection reason can be recorded."""
-    rows = conn.execute("SELECT * FROM companies WHERE status = 'Active'").fetchall()
+    """Every YC company worth considering, unfiltered by ICP.
+
+    The ICP filter is applied separately so a rejection reason can be recorded against
+    each company rather than it silently vanishing.
+    """
+    where = "WHERE status = 'Active'" if REQUIRE_ACTIVE else ""
+    rows = conn.execute(f"SELECT * FROM companies {where}").fetchall()
     return [from_yc_row(r) for r in rows]
 
 

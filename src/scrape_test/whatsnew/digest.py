@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from ..yc.site_news import fetch_company_posts
+from ..feeds.discover import fetch_company_posts
 from .classify import classify, relevance
 from .dates import age_days
 from .sources import Source, sources_for
