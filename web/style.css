@@ -194,3 +194,7 @@ button.mode { background: transparent; color: var(--muted); font-size: 13px; fon
   padding: 7px 14px; border-radius: 8px 8px 0 0; }
 button.mode:hover { color: var(--text); }
 button.mode.active { background: var(--accent-soft); color: var(--accent); }
+
+.prio.warn { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+.chip.warnchip { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); font-weight: 600; }
+tr.watchrow { background: color-mix(in srgb, var(--warn) 5%, transparent); }

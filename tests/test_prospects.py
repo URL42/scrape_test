@@ -225,3 +225,42 @@ class TestFundingJoin:
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             assert await resolve_domain(client, "Nonexistent Widget Co") is None
+
+
+class TestWatchlist:
+    """A company that raised ten days ago and posted nothing is not a bad fit - it is an
+    unmeasured one. Scoring it zero alongside genuinely poor fits loses the freshest lead
+    in the list, so it is held on timing alone and looked at again later."""
+
+    def test_recent_funding_with_no_roles_is_watchlist(self):
+        from scrape_test.prospects.icp import watchlist_candidate
+
+        assert watchlist_candidate(10.0, None)
+        assert watchlist_candidate(10.0, 0)
+
+    def test_old_funding_is_not_held(self):
+        from scrape_test.prospects.icp import watchlist_candidate
+
+        assert not watchlist_candidate(400.0, None)
+
+    def test_a_company_with_roles_is_measured_normally(self):
+        from scrape_test.prospects.icp import watchlist_candidate
+
+        assert not watchlist_candidate(10.0, 25)
+
+    def test_no_funding_date_means_no_watchlist(self):
+        from scrape_test.prospects.icp import watchlist_candidate
+
+        assert not watchlist_candidate(None, None)
+
+    def test_timing_stands_alone_when_fit_is_unmeasured(self):
+        """Priority normally multiplies fit by timing, which would zero these out."""
+        from scrape_test.scoring.products import priority
+        from scrape_test.scoring.timing import timing_score, timing_signals
+
+        signals = timing_signals([], funding_age_days=7)
+        timing = timing_score(signals)
+        assert timing > 0
+        assert priority(0.0, timing) == 0.0  # what the normal rule would give
+        # The watchlist path uses timing directly instead, so the lead survives.
+        assert timing > 30

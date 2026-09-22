@@ -24,7 +24,14 @@ from ..scoring.products import lead_product, priority, product_fit
 from ..scoring.timing import timing_score, timing_signals
 from ..whatsnew import funding_age_for, recently_funded
 from ..yc.tooling import detect_tools, merge_hits, split_atlassian
-from .icp import Candidate, prospect_score, qualifies
+from .icp import (
+    WATCHLIST_RESCAN_DAYS,
+    Candidate,
+    is_ai_first,
+    prospect_score,
+    qualifies,
+    watchlist_candidate,
+)
 from .sources import hn_candidates, yc_candidates
 
 log = logging.getLogger(__name__)
@@ -62,8 +69,8 @@ def store_prospect(conn: sqlite3.Connection, record: dict[str, Any]) -> None:
                one_liner, in_profile, reject_reason, board_provider, board_token,
                board_found_via, open_roles, atlassian, competitors, score, verdict,
                reasons, error, scanned_at, funding_age_days, timing_score,
-               timing_signals, products, lead_product, priority)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               timing_signals, products, lead_product, priority, rescan_after)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(source, name, domain) DO UPDATE SET
                batch=excluded.batch, team_size=excluded.team_size,
                one_liner=excluded.one_liner, in_profile=excluded.in_profile,
@@ -76,7 +83,8 @@ def store_prospect(conn: sqlite3.Connection, record: dict[str, Any]) -> None:
                funding_age_days=excluded.funding_age_days,
                timing_score=excluded.timing_score,
                timing_signals=excluded.timing_signals, products=excluded.products,
-               lead_product=excluded.lead_product, priority=excluded.priority""",
+               lead_product=excluded.lead_product, priority=excluded.priority,
+               rescan_after=excluded.rescan_after""",
         (
             record["name"], record["domain"], record["source"], record.get("external_id"),
             record.get("batch"), record.get("team_size"), record.get("one_liner"),
@@ -90,7 +98,7 @@ def store_prospect(conn: sqlite3.Connection, record: dict[str, Any]) -> None:
             record.get("funding_age_days"), record.get("timing_score"),
             json.dumps(record.get("timing_signals") or []),
             json.dumps(record.get("products") or {}), record.get("lead_product"),
-            record.get("priority"),
+            record.get("priority"), record.get("rescan_after"),
         ),
     )
     conn.commit()
@@ -111,26 +119,45 @@ async def scan_one(client: httpx.AsyncClient, c: Candidate) -> dict[str, Any]:
         "funding_age_days": funded_age,
     }
 
+    def unscannable(reason: str, **extra: Any) -> dict[str, Any]:
+        """A dead end, unless they just raised - then hold them for a later look."""
+        if watchlist_candidate(funded_age, None):
+            signals = timing_signals([], funding_age_days=funded_age)
+            return {
+                **base, **extra, "in_profile": True, "verdict": "watchlist",
+                "reject_reason": reason,
+                "timing_score": timing_score(signals), "timing_signals": signals,
+                # Fit is unmeasured, not poor, so timing stands alone for now.
+                "priority": timing_score(signals),
+                "rescan_after": time.time() + WATCHLIST_RESCAN_DAYS * 86400,
+                "reasons": [
+                    f"raised {funded_age:.0f} days ago",
+                    "no job postings to read yet - fit is unmeasured, not poor",
+                    f"queued for another look in {WATCHLIST_RESCAN_DAYS:.0f} days",
+                ],
+            }
+        return {**base, **extra, "in_profile": False, "verdict": "unscannable",
+                "reject_reason": reason}
+
     domain = c.domain or await resolve_domain(client, c.name)
     if not domain:
-        return {**base, "in_profile": False, "verdict": "unscannable",
-                "reject_reason": "no website found"}
+        return unscannable("no website found")
     base["domain"] = domain
 
     try:
         board = await discover_board(client, domain)
     except Exception as exc:  # noqa: BLE001 - one bad site must not stop the sweep
-        return {**base, "in_profile": False, "verdict": "unscannable",
-                "error": f"discovery failed: {exc}"[:200]}
+        return unscannable("discovery failed", error=f"discovery failed: {exc}"[:200])
 
     texts: list[tuple[str, str]] = []
     if board is not None:
         try:
             postings = await fetch_board(client, board)
         except ATSUnavailable as exc:
-            return {**base, "in_profile": False, "verdict": "unscannable",
-                    "error": str(exc)[:200],
-                    "board_provider": board.provider, "board_token": board.token}
+            return unscannable(
+                "job board unreadable", error=str(exc)[:200],
+                board_provider=board.provider, board_token=board.token,
+            )
         texts = [(p.title[:40], p.description) for p in postings[:MAX_POSTINGS_SCANNED]]
         base |= {
             "board_provider": board.provider, "board_token": board.token,
@@ -146,12 +173,17 @@ async def scan_one(client: httpx.AsyncClient, c: Candidate) -> dict[str, Any]:
                  "board_found_via": "YC job board (no ATS found)"}
 
     if not texts:
-        return {**base, "in_profile": False, "verdict": "unscannable",
-                "reject_reason": "no readable job postings"}
+        return unscannable("no readable job postings")
 
     hits = merge_hits([detect_tools(text, source=title, company=c.name) for title, text in texts])
     ours, theirs = split_atlassian(hits)
     open_roles = len(texts)
+
+    if c.source == "digest" and not is_ai_first(c.tags, c.one_liner):
+        # The headline is thin ("Partnering with Etched"); the postings are not.
+        sample = " ".join(text for _title, text in texts[:12])[:6000]
+        if is_ai_first(None, sample):
+            c.one_liner = (c.one_liner or "") + " " + sample[:200]
 
     in_profile, reason = qualifies(c, open_roles=open_roles)
     atlassian = [h.as_dict() for h in ours]
@@ -315,14 +347,33 @@ async def run_scan(
     return run_id
 
 
+def due_for_rescan(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Watchlist companies whose rescan date has passed - they should have postings now."""
+    rows = conn.execute(
+        "SELECT * FROM prospects WHERE verdict = 'watchlist' AND rescan_after IS NOT NULL "
+        "AND rescan_after <= ? ORDER BY funding_age_days ASC",
+        (time.time(),),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def load_prospects(
-    conn: sqlite3.Connection, *, only_prospects: bool = True, limit: int = 300
+    conn: sqlite3.Connection,
+    *,
+    only_prospects: bool = True,
+    verdict: str | None = None,
+    limit: int = 300,
 ) -> list[dict[str, Any]]:
-    where = "WHERE verdict = 'prospect'" if only_prospects else ""
+    if verdict:
+        where = "WHERE verdict = :verdict"
+    elif only_prospects:
+        where = "WHERE verdict IN ('prospect', 'watchlist')"
+    else:
+        where = ""
     rows = conn.execute(
         f"SELECT * FROM prospects {where} "
-        "ORDER BY COALESCE(priority, 0) DESC, score DESC, open_roles DESC LIMIT ?",
-        (limit,),
+        "ORDER BY COALESCE(priority, 0) DESC, score DESC, open_roles DESC LIMIT :limit",
+        {"verdict": verdict, "limit": limit},
     ).fetchall()
     out = []
     for r in rows:

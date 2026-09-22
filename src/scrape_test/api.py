@@ -30,6 +30,7 @@ from .http import make_client
 from .news import SOURCES, get_source
 from .prospects import latest_run, load_prospects, run_scan
 from .prospects.icp import PROSPECT_WEIGHTS
+from .prospects.scan import due_for_rescan
 from .scoring import RULES_VERSION, WEIGHTS, compute_score
 from .scoring.products import lead_product, priority, product_fit
 from .scoring.score import rescore_all, store_score
@@ -233,17 +234,24 @@ async def scan_status() -> dict[str, Any]:
 @app.get("/api/prospects")
 async def prospects(
     only_prospects: bool = Query(True),
+    verdict: str = Query(""),
     limit: int = Query(300, ge=1, le=2000),
 ) -> dict[str, Any]:
     with session() as conn:
-        rows = load_prospects(conn, only_prospects=only_prospects, limit=limit)
+        rows = load_prospects(
+            conn, only_prospects=only_prospects, verdict=verdict or None, limit=limit
+        )
+        due = due_for_rescan(conn)
         counts = {
             r["verdict"]: r["n"]
             for r in conn.execute(
                 "SELECT verdict, COUNT(*) AS n FROM prospects GROUP BY verdict"
             )
         }
-    return {"prospects": rows, "counts": counts, "weights": PROSPECT_WEIGHTS}
+    return {
+        "prospects": rows, "counts": counts, "weights": PROSPECT_WEIGHTS,
+        "due_for_rescan": len(due),
+    }
 
 
 @app.get("/api/search/idea")

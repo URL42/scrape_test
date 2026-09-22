@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS prospects (
     products        TEXT NOT NULL DEFAULT '{}',
     lead_product    TEXT,
     priority        REAL,
+    rescan_after    REAL,
     UNIQUE(source, name, domain)
 );
 CREATE INDEX IF NOT EXISTS idx_prospects_score ON prospects(score DESC);
@@ -195,7 +196,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("funding_age_days", "REAL"), ("timing_score", "REAL"),
         ("timing_signals", "TEXT NOT NULL DEFAULT '[]'"),
         ("products", "TEXT NOT NULL DEFAULT '{}'"),
-        ("lead_product", "TEXT"), ("priority", "REAL"),
+        ("lead_product", "TEXT"), ("priority", "REAL"), ("rescan_after", "REAL"),
     ):
         if pros_cols and col not in pros_cols:
             conn.execute(f"ALTER TABLE prospects ADD COLUMN {col} {decl}")

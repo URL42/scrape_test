@@ -135,7 +135,10 @@ async function loadDigest() {
 }
 
 function verdictClass(v) {
-  return { "prospect": "good", "existing customer": "bad", "no signal": "muted" }[v] || "muted";
+  return {
+    "prospect": "good", "watchlist": "warn",
+    "existing customer": "bad", "no signal": "muted",
+  }[v] || "muted";
 }
 
 function renderProspects(d) {
@@ -147,6 +150,8 @@ function renderProspects(d) {
       <p class="empty">No prospects yet. Run a scan, or tick "show all verdicts".</p>`;
     return;
   }
+  const watch = rows.filter((r) => r.verdict === "watchlist").length;
+  const due = d.due_for_rescan || 0;
   const body = rows.map((r) => {
     const stated = (r.competitors || []).filter((c) => c.strength === "stated");
     const comp = (stated.length ? stated : (r.competitors || []).slice(0, 3))
@@ -154,18 +159,27 @@ function renderProspects(d) {
       .join(" ") || "<span class='toolsrc'>—</span>";
     const atl = (r.atlassian || []).map((a) => esc(a.product)).join(", ");
     const quote = stated.length ? stated[0].evidence : ((r.competitors || [])[0] || {}).evidence;
-    return `<tr>
-      <td class="pscore">${(r.score || 0).toFixed(0)}</td>
+    const isWatch = r.verdict === "watchlist";
+    const shown = isWatch ? (r.priority || 0) : (r.priority || r.score || 0);
+    return `<tr class="${isWatch ? "watchrow" : ""}">
+      <td class="pscore">${shown.toFixed(0)}${isWatch ? '<div class="toolsrc">timing only</div>' : ""}</td>
       <td>
         <div class="pname">${esc(r.name)}</div>
-        <div class="toolsrc">${esc(r.batch || r.source)} · ${r.open_roles ?? "?"} roles · ${esc(r.board_provider || "—")}</div>
+        <div class="toolsrc">${esc(r.batch || r.source)} · ${r.open_roles ?? "?"} roles${
+          r.funding_age_days != null ? ` · raised ${Math.round(r.funding_age_days)}d ago` : ""
+        }${r.lead_product ? ` · lead ${esc(r.lead_product)}` : ""}</div>
       </td>
       <td>${comp}${quote ? `<div class="toolev">“${esc(String(quote).slice(0, 130))}”</div>` : ""}</td>
       <td>${atl ? `<span class="chip weak">${esc(atl)}</span>` : "<span class='toolsrc'>none</span>"}</td>
       <td><span class="prio ${verdictClass(r.verdict)}">${esc(r.verdict || "")}</span></td>
     </tr>`;
   }).join("");
-  $("prospects").innerHTML = `<div class="chips" style="margin-bottom:10px">${counts}</div>
+  $("prospects").innerHTML = `<div class="chips" style="margin-bottom:10px">${counts}
+      ${watch ? `<span class="chip warnchip">${watch} on watchlist</span>` : ""}
+      ${due ? `<span class="chip strong">${due} due for rescan</span>` : ""}</div>
+    ${watch ? `<p class="notice">Watchlist rows raised too recently to have posted jobs.
+      Their fit is <b>unmeasured, not poor</b>, so they are ranked on timing alone and
+      queued for another look once postings appear.</p>` : ""}
     <table class="ptable"><thead><tr>
       <th>Fit</th><th>Company</th><th>Competing tooling</th><th>Atlassian</th><th>Verdict</th>
     </tr></thead><tbody>${body}</tbody></table>`;

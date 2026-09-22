@@ -27,6 +27,14 @@ REQUIRE_ACTIVE = True
 PROXY_ROLES_MIN = 2
 PROXY_ROLES_MAX = 120
 
+# A company that raised this recently is worth holding even with no job data yet: it has
+# not had time to post roles. Scanning it once and discarding it throws away the freshest
+# timing signal the tool can get.
+WATCHLIST_MAX_FUNDING_AGE_DAYS = 120.0
+# How long to wait before looking again. Roughly the lag between closing a round and the
+# hiring page filling up.
+WATCHLIST_RESCAN_DAYS = 42.0
+
 AI_TAGS = {
     "ai", "generative ai", "machine learning", "ai assistant", "aiops",
     "conversational ai", "computer vision", "nlp", "ml", "data labeling",
@@ -132,6 +140,20 @@ PROSPECT_WEIGHTS = {
     "size_band": 15.0,             # squarely in the coordination-pain window
     "recent_batch": 10.0,          # tooling decisions still live
 }
+
+
+def watchlist_candidate(funding_age_days: float | None, open_roles: int | None) -> bool:
+    """True when fit is *unmeasured* rather than measured and poor.
+
+    A company that raised ten days ago and has posted nothing is not a bad fit - we simply
+    cannot see yet. Scoring it zero next to genuinely poor fits loses the best lead in the
+    list, so it is held and looked at again once postings appear.
+    """
+    if funding_age_days is None:
+        return False
+    if funding_age_days > WATCHLIST_MAX_FUNDING_AGE_DAYS:
+        return False
+    return not open_roles
 
 
 def prospect_score(
