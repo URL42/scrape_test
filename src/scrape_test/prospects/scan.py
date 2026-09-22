@@ -63,15 +63,21 @@ def latest_run(conn: sqlite3.Connection) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def _norm_key_for(record: dict[str, Any]) -> str:
+    name = re.sub(r"[^a-z0-9]+", "", (record.get("name") or "").lower())
+    name = re.sub(r"(inc|llc|ltd|corp|gmbh|ai|io|labs)$", "", name)
+    return name or (record.get("domain") or record.get("name") or "?")
+
+
 def store_prospect(conn: sqlite3.Connection, record: dict[str, Any]) -> None:
     conn.execute(
         """INSERT INTO prospects (name, domain, source, external_id, batch, team_size,
                one_liner, in_profile, reject_reason, board_provider, board_token,
                board_found_via, open_roles, atlassian, competitors, score, verdict,
                reasons, error, scanned_at, funding_age_days, timing_score,
-               timing_signals, products, lead_product, priority, rescan_after)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(source, name, domain) DO UPDATE SET
+               timing_signals, products, lead_product, priority, rescan_after, norm_key)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(norm_key) DO UPDATE SET
                batch=excluded.batch, team_size=excluded.team_size,
                one_liner=excluded.one_liner, in_profile=excluded.in_profile,
                reject_reason=excluded.reject_reason,
@@ -84,7 +90,8 @@ def store_prospect(conn: sqlite3.Connection, record: dict[str, Any]) -> None:
                timing_score=excluded.timing_score,
                timing_signals=excluded.timing_signals, products=excluded.products,
                lead_product=excluded.lead_product, priority=excluded.priority,
-               rescan_after=excluded.rescan_after""",
+               rescan_after=excluded.rescan_after, domain=excluded.domain,
+               source=excluded.source, name=excluded.name""",
         (
             record["name"], record["domain"], record["source"], record.get("external_id"),
             record.get("batch"), record.get("team_size"), record.get("one_liner"),
@@ -99,6 +106,7 @@ def store_prospect(conn: sqlite3.Connection, record: dict[str, Any]) -> None:
             json.dumps(record.get("timing_signals") or []),
             json.dumps(record.get("products") or {}), record.get("lead_product"),
             record.get("priority"), record.get("rescan_after"),
+            _norm_key_for(record),
         ),
     )
     conn.commit()
@@ -139,7 +147,7 @@ async def scan_one(client: httpx.AsyncClient, c: Candidate) -> dict[str, Any]:
         return {**base, **extra, "in_profile": False, "verdict": "unscannable",
                 "reject_reason": reason}
 
-    domain = c.domain or await resolve_domain(client, c.name)
+    domain = normalise_host(c.domain) or await resolve_domain(client, c.name)
     if not domain:
         return unscannable("no website found")
     base["domain"] = domain
@@ -222,6 +230,31 @@ async def scan_one(client: httpx.AsyncClient, c: Candidate) -> dict[str, Any]:
 
 COMMON_TLDS = (".com", ".ai", ".io", ".co", ".dev")
 
+# Subdomains that front a job board rather than the company itself. Left in place they
+# make careers.telli.com and telli.com look like two different companies.
+_HOST_PREFIXES = ("careers.", "jobs.", "job.", "www.", "boards.", "apply.")
+
+
+def normalise_host(host: str | None) -> str | None:
+    if not host:
+        return None
+    h = re.sub(r"^https?://", "", host.strip().lower()).split("/")[0].split(":")[0]
+    changed = True
+    while changed:
+        changed = False
+        for prefix in _HOST_PREFIXES:
+            if h.startswith(prefix):
+                h = h[len(prefix):]
+                changed = True
+    return h or None
+
+
+def _dedupe_key(c: Candidate) -> str:
+    """One company, one row - regardless of which universe surfaced it."""
+    name = re.sub(r"[^a-z0-9]+", "", (c.name or "").lower())
+    name = re.sub(r"(inc|llc|ltd|corp|gmbh|ai|io|labs)$", "", name)
+    return name or (normalise_host(c.domain) or "")
+
 
 async def resolve_domain(client: httpx.AsyncClient, name: str) -> str | None:
     """Find a website for a company we only know by name.
@@ -236,7 +269,7 @@ async def resolve_domain(client: httpx.AsyncClient, name: str) -> str | None:
     with session() as conn:
         row, _suggestions = resolve_yc(conn, name)
     if row and row["website"]:
-        return re.sub(r"^https?://", "", row["website"]).split("/")[0].removeprefix("www.")
+        return normalise_host(row["website"])
 
     slug = re.sub(r"[^a-z0-9]+", "", name.lower())
     if len(slug) < 3:
@@ -306,9 +339,17 @@ async def gather_candidates(
                 )
             )
 
+    # Dedupe on the company, not on (domain or name). The same company arrives from
+    # several universes - Spott from both Balderton's feed and the YC directory, telli
+    # from HN and YC - and keying on domain let those through as separate rows because a
+    # digest candidate has no domain yet. Keep whichever source carries the most metadata.
+    rank = {"yc": 0, "hn": 1, "digest": 2}
     seen: dict[str, Candidate] = {}
     for c in out:
-        seen.setdefault((c.domain or c.name).lower(), c)
+        key = _dedupe_key(c)
+        prior = seen.get(key)
+        if prior is None or rank.get(c.source, 9) < rank.get(prior.source, 9):
+            seen[key] = c
     return list(seen.values())
 
 
