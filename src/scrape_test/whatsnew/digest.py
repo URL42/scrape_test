@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sqlite3
 import time
 from typing import Any
@@ -13,6 +14,7 @@ import httpx
 
 from ..yc.site_news import fetch_company_posts
 from .classify import classify, relevance
+from .dates import age_days
 from .sources import Source, sources_for
 
 log = logging.getLogger(__name__)
@@ -36,6 +38,10 @@ async def _one(
     out = []
     for p in posts:
         c = classify(p.title, p.summary)
+        # A fund announcing its own new fund is not a portfolio company.
+        # "Introducing Greylock 18" should not read as an investment in "Greylock".
+        if c.company and _norm_name(c.company) == _norm_name(src.name):
+            c.company = None
         out.append({
             "source_name": src.name, "source_kind": src.kind, "source_region": src.region,
             "title": p.title, "url": p.url, "published": p.published,
@@ -113,8 +119,11 @@ def load_digest(
     return out
 
 
-def recently_funded(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str, Any]]:
-    """Named companies from funding announcements - the freshest prospect source there is."""
+def recently_funded(conn: sqlite3.Connection, limit: int = 300) -> list[dict[str, Any]]:
+    """Named companies from funding announcements - the freshest prospect source there is.
+
+    Each carries the age of its announcement, which is what the timing score consumes.
+    """
     rows = conn.execute(
         "SELECT company, amount, round_stage, source_name, title, url, published "
         "FROM digest_items WHERE company IS NOT NULL AND tags LIKE '%\"funding\"%' "
@@ -123,5 +132,47 @@ def recently_funded(conn: sqlite3.Connection, limit: int = 200) -> list[dict[str
     ).fetchall()
     seen: dict[str, dict[str, Any]] = {}
     for r in rows:
-        seen.setdefault(r["company"].lower(), dict(r))
+        record = dict(r)
+        record["age_days"] = age_days(record.get("published"))
+        # Keep the freshest announcement when a company appears more than once.
+        key = record["company"].lower()
+        prior = seen.get(key)
+        if prior is None or (record["age_days"] or 1e9) < (prior["age_days"] or 1e9):
+            seen[key] = record
     return list(seen.values())
+
+
+def funding_age_for(conn: sqlite3.Connection, company_name: str) -> float | None:
+    """Days since this company's most recent funding announcement, if we saw one.
+
+    Matched on a normalised name: announcements say "Axiamatic" where a directory says
+    "Axiamatic Inc." An exact match would miss most of them.
+    """
+    target = _norm_name(company_name)
+    if not target:
+        return None
+    rows = conn.execute(
+        "SELECT company, published FROM digest_items "
+        "WHERE company IS NOT NULL AND tags LIKE '%\"funding\"%'"
+    ).fetchall()
+    best: float | None = None
+    for r in rows:
+        if _norm_name(r["company"]) != target:
+            continue
+        age = age_days(r["published"])
+        if age is not None and (best is None or age < best):
+            best = age
+    return best
+
+
+def _norm_name(name: str | None) -> str:
+    if not name:
+        return ""
+    text = re.sub(r"[^a-z0-9 ]+", " ", name.lower())
+    text = re.sub(
+        r"\b(inc|llc|ltd|limited|corp|co|gmbh|bv|ab|oy|sa|plc|ai|io|labs|technologies|"
+        r"tech|software|systems|group|holdings)\b",
+        " ",
+        text,
+    )
+    return re.sub(r"\s+", "", text)

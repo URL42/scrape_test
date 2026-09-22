@@ -20,6 +20,7 @@ function safeUrl(raw) {
 let jobsData = [];
 let currentCompany = null;
 let briefAvailable = false;
+let searchMode = "company";
 let sortState = { key: "pretty_role", dir: 1 };
 
 async function loadSources() {
@@ -599,10 +600,95 @@ function bindBrief() {
   if (r) r.addEventListener("click", () => fetchBrief(true));
 }
 
+function setMode(mode) {
+  searchMode = mode;
+  document.querySelectorAll(".mode").forEach((b) =>
+    b.classList.toggle("active", b.dataset.mode === mode));
+  const label = { company: "Company", idea: "Idea", vc: "Investor" }[mode];
+  document.querySelector('label[for="company"]').firstChild.textContent = label + " ";
+  $("company").placeholder =
+    { company: "Stripe", idea: "AI agents for customer support", vc: "Greylock" }[mode];
+  // The company panels only make sense for a company lookup.
+  ["ycpanel", "techpanel", "newspanel"].forEach((id) => {
+    const el = $(id); if (el) el.hidden = mode !== "company";
+  });
+  $("resultspanel").hidden = mode === "company";
+}
+document.querySelectorAll(".mode").forEach((b) =>
+  b.addEventListener("click", () => setMode(b.dataset.mode)));
+
+function renderIdea(d) {
+  $("resultstitle").textContent = `Companies matching “${d.query}”`;
+  if (!d.results.length) {
+    $("moderesults").innerHTML = `<p class="empty">No matches. Try different words.</p>`;
+    return;
+  }
+  $("moderesults").innerHTML = `<table class="ptable"><thead><tr>
+      <th>Match</th><th>Company</th><th>What they do</th><th>Scanned</th>
+    </tr></thead><tbody>${d.results.map((r) => {
+      const p = r.prospect;
+      return `<tr>
+        <td class="pscore">${r.match.toFixed(0)}</td>
+        <td><div class="pname">${esc(r.name)}</div>
+            <div class="toolsrc">${esc(r.batch || "")} · ${r.team_size ?? "?"} people${r.is_hiring ? " · hiring" : ""}</div></td>
+        <td>${esc(r.one_liner || "")}</td>
+        <td>${p ? `<span class="prio ${verdictClass(p.verdict)}">${esc(p.verdict)}</span>
+              ${p.lead_product ? `<div class="toolsrc">lead: ${esc(p.lead_product)}</div>` : ""}`
+             : "<span class='toolsrc'>not scanned</span>"}</td>
+      </tr>`;
+    }).join("")}</tbody></table>`;
+}
+
+function renderInvestor(d) {
+  $("resultstitle").textContent = `${d.investor} — recent portfolio`;
+  if (!d.portfolio.length) {
+    $("moderesults").innerHTML =
+      `<p class="empty">No named investments found. Refresh the what's-new feed, or try another firm.</p>`;
+    return;
+  }
+  $("moderesults").innerHTML = `<table class="ptable"><thead><tr>
+      <th>Age</th><th>Company</th><th>Announcement</th><th>Scanned</th>
+    </tr></thead><tbody>${d.portfolio.map((e) => {
+      const p = e.prospect;
+      const age = e.age_days == null ? "?" : `${Math.round(e.age_days)}d`;
+      const href = safeUrl(e.url);
+      return `<tr>
+        <td class="pscore" style="font-size:14px">${esc(age)}</td>
+        <td><div class="pname">${esc(e.company)}</div>
+            <div class="toolsrc">${esc(e.amount || "")}${e.round_stage ? " · " + esc(e.round_stage) : ""}</div></td>
+        <td>${href ? `<a class="ext" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(e.title)}</a>` : esc(e.title)}</td>
+        <td>${p ? `<span class="prio ${verdictClass(p.verdict)}">${esc(p.verdict)}</span>`
+                : "<span class='toolsrc'>not scanned</span>"}</td>
+      </tr>`;
+    }).join("")}</tbody></table>`;
+}
+
+async function runModeSearch(q) {
+  const url = searchMode === "idea"
+    ? `/api/search/idea?q=${encodeURIComponent(q)}`
+    : `/api/search/investor?name=${encodeURIComponent(q)}`;
+  $("moderesults").innerHTML = `<p class="empty">Searching…</p>`;
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || `API returned ${r.status}`);
+    (searchMode === "idea" ? renderIdea : renderInvestor)(d);
+    setStatus(searchMode === "idea" ? `${d.count} matches` : `${d.portfolio.length} portfolio companies`);
+  } catch (err) {
+    $("moderesults").innerHTML = `<p class="empty">${esc(err.message || err)}</p>`;
+  }
+}
+
 $("searchform").addEventListener("submit", async (e) => {
   e.preventDefault();
   const company = $("company").value.trim();
   if (!company) return;
+  if (searchMode !== "company") {
+    $("go").disabled = true;
+    await runModeSearch(company);
+    $("go").disabled = false;
+    return;
+  }
   const params = new URLSearchParams({
     company,
     context: $("context").value.trim(),

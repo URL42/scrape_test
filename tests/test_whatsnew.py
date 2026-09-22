@@ -151,3 +151,38 @@ class TestPriority:
         balanced = priority(60, 60)
         lopsided = priority(100, 20)
         assert balanced > lopsided
+
+
+class TestPublishedDates:
+    """Feeds emit RFC 822; sitemaps emit ISO 8601. Both must parse, and anything else
+    must return None rather than a guess - a wrong date distorts the timing score."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "Wed, 29 Jul 2026 15:00:56 +0000",
+            "Tue, 08 Sep 2026 15:11:00 GMT",
+            "2026-08-26T14:28:35.452Z",
+            "2026-09-17",
+        ],
+    )
+    def test_parses_real_formats(self, value):
+        from scrape_test.whatsnew.dates import age_days
+
+        assert age_days(value) is not None
+
+    @pytest.mark.parametrize("value", ["garbage", "", None, "last Tuesday"])
+    def test_unparseable_is_none_not_a_guess(self, value):
+        from scrape_test.whatsnew.dates import age_days
+
+        assert age_days(value) is None
+
+    def test_age_grows_with_distance(self):
+        from datetime import UTC, datetime
+
+        from scrape_test.whatsnew.dates import age_days
+
+        now = datetime(2026, 9, 22, tzinfo=UTC)
+        recent = age_days("2026-09-15", now=now)
+        old = age_days("2026-01-15", now=now)
+        assert recent is not None and old is not None and old > recent

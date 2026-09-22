@@ -18,6 +18,9 @@ import httpx
 
 from ..ats import ATSUnavailable, discover_board, fetch_board
 from ..db import session
+from ..scoring.products import lead_product, priority, product_fit
+from ..scoring.timing import timing_score, timing_signals
+from ..whatsnew import funding_age_for, recently_funded
 from ..yc.tooling import detect_tools, merge_hits, split_atlassian
 from .icp import Candidate, prospect_score, qualifies
 from .sources import hn_candidates, yc_candidates
@@ -56,8 +59,9 @@ def store_prospect(conn: sqlite3.Connection, record: dict[str, Any]) -> None:
         """INSERT INTO prospects (name, domain, source, external_id, batch, team_size,
                one_liner, in_profile, reject_reason, board_provider, board_token,
                board_found_via, open_roles, atlassian, competitors, score, verdict,
-               reasons, error, scanned_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               reasons, error, scanned_at, funding_age_days, timing_score,
+               timing_signals, products, lead_product, priority)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(source, name, domain) DO UPDATE SET
                batch=excluded.batch, team_size=excluded.team_size,
                one_liner=excluded.one_liner, in_profile=excluded.in_profile,
@@ -66,7 +70,11 @@ def store_prospect(conn: sqlite3.Connection, record: dict[str, Any]) -> None:
                board_found_via=excluded.board_found_via, open_roles=excluded.open_roles,
                atlassian=excluded.atlassian, competitors=excluded.competitors,
                score=excluded.score, verdict=excluded.verdict, reasons=excluded.reasons,
-               error=excluded.error, scanned_at=excluded.scanned_at""",
+               error=excluded.error, scanned_at=excluded.scanned_at,
+               funding_age_days=excluded.funding_age_days,
+               timing_score=excluded.timing_score,
+               timing_signals=excluded.timing_signals, products=excluded.products,
+               lead_product=excluded.lead_product, priority=excluded.priority""",
         (
             record["name"], record["domain"], record["source"], record.get("external_id"),
             record.get("batch"), record.get("team_size"), record.get("one_liner"),
@@ -77,6 +85,10 @@ def store_prospect(conn: sqlite3.Connection, record: dict[str, Any]) -> None:
             json.dumps(record.get("competitors") or []),
             record.get("score"), record.get("verdict"),
             json.dumps(record.get("reasons") or []), record.get("error"), time.time(),
+            record.get("funding_age_days"), record.get("timing_score"),
+            json.dumps(record.get("timing_signals") or []),
+            json.dumps(record.get("products") or {}), record.get("lead_product"),
+            record.get("priority"),
         ),
     )
     conn.commit()
@@ -130,19 +142,41 @@ async def scan_one(client: httpx.AsyncClient, c: Candidate) -> dict[str, Any]:
     open_roles = len(texts)
 
     in_profile, reason = qualifies(c, open_roles=open_roles)
-    score, verdict, reasons = prospect_score(
-        c, [h.as_dict() for h in ours], [h.as_dict() for h in theirs], open_roles
+    atlassian = [h.as_dict() for h in ours]
+    competitors = [h.as_dict() for h in theirs]
+    score, verdict, reasons = prospect_score(c, atlassian, competitors, open_roles)
+
+    # The join: the digest knows who raised and when, so the timing score can use it.
+    with session() as conn:
+        funded_age = funding_age_for(conn, c.name)
+
+    jobs_for_scoring = [
+        {"title": title, "description": text, "role": "", "pretty_role": "", "location": ""}
+        for title, text in texts
+    ]
+    signals = timing_signals(
+        jobs_for_scoring, funding_age_days=funded_age, open_roles=open_roles
     )
+    t_score = timing_score(signals)
+    fits = product_fit(jobs_for_scoring, competitors + atlassian, None)
+    lead, lead_score = lead_product(fits)
+
     return {
         **base,
         "in_profile": in_profile,
         "reject_reason": None if in_profile else reason,
         "open_roles": open_roles,
-        "atlassian": [h.as_dict() for h in ours],
-        "competitors": [h.as_dict() for h in theirs],
+        "atlassian": atlassian,
+        "competitors": competitors,
         "score": score if in_profile else 0.0,
         "verdict": verdict if in_profile else "out of profile",
         "reasons": reasons,
+        "funding_age_days": funded_age,
+        "timing_score": t_score,
+        "timing_signals": signals,
+        "products": fits,
+        "lead_product": lead,
+        "priority": priority(lead_score, t_score) if in_profile else 0.0,
     }
 
 
@@ -185,6 +219,20 @@ async def gather_candidates(
             out.extend(c for c in yc_candidates(conn) if qualifies(c)[0])
     if hn_threads:
         out.extend(await hn_candidates(client, threads=hn_threads))
+
+    # Companies the digest saw get funded. These are the freshest leads available - the
+    # announcement is days old - and they arrive with their funding date attached.
+    with session() as conn:
+        for row in recently_funded(conn):
+            name = (row.get("company") or "").strip()
+            if not name:
+                continue
+            out.append(
+                Candidate(
+                    name=name, domain=None, source="digest",
+                    one_liner=(row.get("title") or "")[:300], is_hiring=True,
+                )
+            )
 
     seen: dict[str, Candidate] = {}
     for c in out:
@@ -232,13 +280,15 @@ def load_prospects(
 ) -> list[dict[str, Any]]:
     where = "WHERE verdict = 'prospect'" if only_prospects else ""
     rows = conn.execute(
-        f"SELECT * FROM prospects {where} ORDER BY score DESC, open_roles DESC LIMIT ?",
+        f"SELECT * FROM prospects {where} "
+        "ORDER BY COALESCE(priority, 0) DESC, score DESC, open_roles DESC LIMIT ?",
         (limit,),
     ).fetchall()
     out = []
     for r in rows:
         d = dict(r)
-        for key in ("atlassian", "competitors", "reasons"):
+        for key in ("atlassian", "competitors", "reasons", "timing_signals"):
             d[key] = json.loads(d.get(key) or "[]")
+        d["products"] = json.loads(d.get("products") or "{}")
         out.append(d)
     return out

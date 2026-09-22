@@ -187,3 +187,10 @@ table.ptable tbody tr:hover { background: var(--accent-soft); }
 .prio.good { background: color-mix(in srgb, var(--good) 20%, transparent); color: var(--good); }
 .prio.bad { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
 .prio.muted { background: var(--chip); color: var(--muted); }
+
+/* ---- search mode switcher ---- */
+.modebar { display: flex; gap: 6px; padding: 12px 24px 0; background: var(--surface); }
+button.mode { background: transparent; color: var(--muted); font-size: 13px; font-weight: 600;
+  padding: 7px 14px; border-radius: 8px 8px 0 0; }
+button.mode:hover { color: var(--text); }
+button.mode.active { background: var(--accent-soft); color: var(--accent); }

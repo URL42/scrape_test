@@ -15,6 +15,12 @@
   <div class="meta" id="dirmeta">loading directory…</div>
 </header>
 
+<div class="modebar">
+  <button type="button" class="mode active" data-mode="company">Company</button>
+  <button type="button" class="mode" data-mode="idea">Idea</button>
+  <button type="button" class="mode" data-mode="vc">Investor</button>
+</div>
+
 <form id="searchform" class="search">
   <div class="field grow">
     <label for="company">Company</label>
@@ -39,6 +45,11 @@
 </form>
 
 <div id="status" class="status" hidden></div>
+
+<section class="panel prospects" id="resultspanel" hidden>
+  <h2 id="resultstitle">Results</h2>
+  <div class="panel-body"><div id="moderesults"></div></div>
+</section>
 
 <section class="panel prospects" id="digestpanel">
   <h2>What's new <span class="sub">VC announcements &amp; tech press, classified for sales</span></h2>

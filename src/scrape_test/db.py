@@ -122,6 +122,12 @@ CREATE TABLE IF NOT EXISTS prospects (
     reasons         TEXT NOT NULL DEFAULT '[]',
     error           TEXT,
     scanned_at      REAL,
+    funding_age_days REAL,
+    timing_score    REAL,
+    timing_signals  TEXT NOT NULL DEFAULT '[]',
+    products        TEXT NOT NULL DEFAULT '{}',
+    lead_product    TEXT,
+    priority        REAL,
     UNIQUE(source, name, domain)
 );
 CREATE INDEX IF NOT EXISTS idx_prospects_score ON prospects(score DESC);
@@ -184,6 +190,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
     job_cols = {r["name"] for r in conn.execute("PRAGMA table_info(job_postings)")}
     if "description" not in job_cols:
         conn.execute("ALTER TABLE job_postings ADD COLUMN description TEXT")
+    pros_cols = {r["name"] for r in conn.execute("PRAGMA table_info(prospects)")}
+    for col, decl in (
+        ("funding_age_days", "REAL"), ("timing_score", "REAL"),
+        ("timing_signals", "TEXT NOT NULL DEFAULT '[]'"),
+        ("products", "TEXT NOT NULL DEFAULT '{}'"),
+        ("lead_product", "TEXT"), ("priority", "REAL"),
+    ):
+        if pros_cols and col not in pros_cols:
+            conn.execute(f"ALTER TABLE prospects ADD COLUMN {col} {decl}")
     post_cols = {r["name"] for r in conn.execute("PRAGMA table_info(company_posts)")}
     if post_cols and "source" not in post_cols:
         # The UNIQUE constraint changed, so rebuild rather than ALTER.

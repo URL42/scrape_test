@@ -34,6 +34,7 @@ from .scoring import RULES_VERSION, WEIGHTS, compute_score
 from .scoring.products import lead_product, priority, product_fit
 from .scoring.score import rescore_all, store_score
 from .scoring.timing import timing_score, timing_signals
+from .search import ensure_index, idea_search, investor_search, list_investors
 from .whatsnew import KNOWN_GAPS, build_digest, load_digest, recently_funded, store_digest
 from .yc.directory import company_dict, refresh_directory, resolve
 from .yc.fingerprint import get_fingerprint, load_fingerprint
@@ -243,6 +244,39 @@ async def prospects(
             )
         }
     return {"prospects": rows, "counts": counts, "weights": PROSPECT_WEIGHTS}
+
+
+@app.get("/api/search/idea")
+async def search_idea(
+    q: str = Query(..., min_length=2),
+    limit: int = Query(40, ge=1, le=200),
+) -> dict[str, Any]:
+    """Companies matching a concept, ranked by BM25 over their own descriptions."""
+    with session() as conn:
+        results = idea_search(conn, q, limit=limit)
+    return {"query": q, "results": results, "count": len(results)}
+
+
+@app.get("/api/search/investors")
+async def search_investors() -> dict[str, Any]:
+    with session() as conn:
+        return {"investors": list_investors(conn)}
+
+
+@app.get("/api/search/investor")
+async def search_investor(
+    name: str = Query(..., min_length=2),
+    limit: int = Query(60, ge=1, le=200),
+) -> dict[str, Any]:
+    """One fund's announcements, and the companies they recently backed."""
+    with session() as conn:
+        return investor_search(conn, name, limit=limit)
+
+
+@app.post("/api/search/reindex")
+async def search_reindex() -> dict[str, Any]:
+    with session() as conn:
+        return {"indexed": ensure_index(conn, rebuild=True)}
 
 
 @app.get("/api/technographics")

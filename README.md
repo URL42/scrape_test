@@ -142,6 +142,29 @@ HTTP if you would rather not leave the browser. Bump `RULES_VERSION` when you ch
 logic so stored scores stay comparable. Every score in the UI expands into a per-signal
 breakdown showing exactly which facts produced which points.
 
+## Three ways in
+
+The search bar has three modes.
+
+**Company** — the original lookup: YC profile, technographics, news, brief.
+
+**Idea** — companies matching a concept, ranked by BM25 over their own descriptions via
+SQLite's built-in FTS5 (no new dependency). *"AI agents for customer support"* returns
+Parahelp, FirstSupport.ai, Duckie, Percept.AI; *"developer tools for code review"* returns
+PullRequest, Axolo, cubic. Each row shows whether the company has already been scanned and
+what its lead product is.
+
+**Investor** — one fund's recent portfolio, newest first, straight from the digest:
+
+```
+Antioch      14d   "Introducing Antioch: The Simulation Platform for Physical AI"
+Oak          69d   "Introducing Oak: The AI-Native Identity Operating System"
+Axiamatic   $54M   "Introducing Axiamatic: AI for Enterprise Transformation"
+```
+
+A fund announcing its own new fund is excluded - *"Introducing Greylock 18"* is a fund
+raise, not a portfolio company.
+
 ## What's new: VC deal flow and tech press
 
 ```bash
@@ -187,6 +210,12 @@ axis, each signal decaying with age:
 | Hiring surge, compliance push, going distributed | 10-15 | 90-180d |
 
 A company hiring its first PM is saying out loud that coordination became somebody's job.
+
+**The digest and the scan are joined.** A scanned company is matched by normalised name
+against funding announcements, so "Axiamatic" in a Greylock post lines up with Axiamatic
+in the scan and its announcement date feeds the timing score. Newly funded companies are
+also candidates in their own right - the freshest leads available, arriving days after the
+round.
 
 **Priority = √(fit × timing)**, multiplicative on purpose. High fit with no trigger is a
 nurture; a strong trigger at a company with no problem is noise. Only both together mean
@@ -366,7 +395,7 @@ web/            index.html + app.js + style.css (vanilla, no build step)
 ## Development
 
 ```bash
-uv run pytest          # 208 tests (unit, async, ATS, tooling precision, LLM, env)
+uv run pytest          # 227 tests (unit, async, ATS, tooling precision, LLM, env)
 uv run ruff check src tests
 uv run mypy
 ```
