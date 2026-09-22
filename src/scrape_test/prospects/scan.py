@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sqlite3
 import time
 from typing import Any
@@ -18,6 +19,7 @@ import httpx
 
 from ..ats import ATSUnavailable, discover_board, fetch_board
 from ..db import session
+from ..http import fetch
 from ..scoring.products import lead_product, priority, product_fit
 from ..scoring.timing import timing_score, timing_signals
 from ..whatsnew import funding_age_for, recently_funded
@@ -96,17 +98,27 @@ def store_prospect(conn: sqlite3.Connection, record: dict[str, Any]) -> None:
 
 async def scan_one(client: httpx.AsyncClient, c: Candidate) -> dict[str, Any]:
     """Read one company's board and rank it. Never raises: a failure is a recorded row."""
+    # Funding age is looked up first, not after the board fetch. It was previously below
+    # the early returns, so a company we could not scan lost its funding date entirely -
+    # which is exactly backwards, since a fresh raise is the signal worth keeping.
+    with session() as conn:
+        funded_age = funding_age_for(conn, c.name)
+
     base: dict[str, Any] = {
         "name": c.name, "domain": c.domain, "source": c.source,
         "external_id": c.external_id, "batch": c.batch, "team_size": c.team_size,
         "one_liner": (c.one_liner or "")[:400],
+        "funding_age_days": funded_age,
     }
-    if not c.domain:
+
+    domain = c.domain or await resolve_domain(client, c.name)
+    if not domain:
         return {**base, "in_profile": False, "verdict": "unscannable",
-                "reject_reason": "no website on file"}
+                "reject_reason": "no website found"}
+    base["domain"] = domain
 
     try:
-        board = await discover_board(client, c.domain)
+        board = await discover_board(client, domain)
     except Exception as exc:  # noqa: BLE001 - one bad site must not stop the sweep
         return {**base, "in_profile": False, "verdict": "unscannable",
                 "error": f"discovery failed: {exc}"[:200]}
@@ -146,10 +158,6 @@ async def scan_one(client: httpx.AsyncClient, c: Candidate) -> dict[str, Any]:
     competitors = [h.as_dict() for h in theirs]
     score, verdict, reasons = prospect_score(c, atlassian, competitors, open_roles)
 
-    # The join: the digest knows who raised and when, so the timing score can use it.
-    with session() as conn:
-        funded_age = funding_age_for(conn, c.name)
-
     jobs_for_scoring = [
         {"title": title, "description": text, "role": "", "pretty_role": "", "location": ""}
         for title, text in texts
@@ -178,6 +186,38 @@ async def scan_one(client: httpx.AsyncClient, c: Candidate) -> dict[str, Any]:
         "lead_product": lead,
         "priority": priority(lead_score, t_score) if in_profile else 0.0,
     }
+
+
+COMMON_TLDS = (".com", ".ai", ".io", ".co", ".dev")
+
+
+async def resolve_domain(client: httpx.AsyncClient, name: str) -> str | None:
+    """Find a website for a company we only know by name.
+
+    Funding announcements name the company but link to the investor's blog, so a digest
+    candidate arrives with no domain at all. The YC directory resolves some by name; the
+    rest are probed against a handful of common TLDs, which is how most startups are
+    reachable.
+    """
+    from ..yc.directory import resolve as resolve_yc
+
+    with session() as conn:
+        row, _suggestions = resolve_yc(conn, name)
+    if row and row["website"]:
+        return re.sub(r"^https?://", "", row["website"]).split("/")[0].removeprefix("www.")
+
+    slug = re.sub(r"[^a-z0-9]+", "", name.lower())
+    if len(slug) < 3:
+        return None
+    for tld in COMMON_TLDS:
+        candidate = f"{slug}{tld}"
+        try:
+            resp = await fetch(client, f"https://{candidate}", retries=1, max_bytes=60_000)
+        except Exception:  # noqa: BLE001 - a domain that does not resolve is the normal case
+            continue
+        if resp.ok and len(resp.text) > 500:
+            return candidate
+    return None
 
 
 async def _yc_fallback_texts(

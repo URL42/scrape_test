@@ -169,3 +169,59 @@ class TestHnParsing:
 
     def test_rejects_a_post_with_no_domain(self):
         assert parse_hn_post("Acme Corp | Engineer | Remote, email us") is None
+
+
+class TestFundingJoin:
+    """The digest knows who just raised; the scan has to be able to use it.
+
+    Two bugs made this impossible on the first pass: the funding lookup sat *after* the
+    board fetch, so any company we could not scan lost its funding date, and digest
+    candidates arrive with a company name and no domain at all - funding announcements
+    link to the investor's blog, not the company.
+    """
+
+    def test_funding_lookup_matches_on_a_normalised_name(self, tmp_path, monkeypatch):
+        import time
+
+        from scrape_test import db as db_mod
+        from scrape_test.whatsnew import funding_age_for
+
+        monkeypatch.setattr(db_mod, "DB_PATH", tmp_path / "j.db")
+        db_mod.init_db()
+        with db_mod.session() as conn:
+            conn.execute(
+                "INSERT INTO digest_items (source_name, source_kind, title, url, "
+                "published, tags, company, relevance, fetched_at) "
+                "VALUES ('Greylock','vc','Introducing Antioch','https://g.test/1',"
+                "'Tue, 08 Sep 2026 15:11:00 GMT','[\"funding\"]','Antioch',90,?)",
+                (time.time(),),
+            )
+            # Announcements say "Antioch"; a directory says "Antioch Inc." or "Antioch AI".
+            assert funding_age_for(conn, "Antioch") is not None
+            assert funding_age_for(conn, "Antioch Inc.") is not None
+            assert funding_age_for(conn, "Antioch AI") is not None
+            assert funding_age_for(conn, "Something Else") is None
+
+    async def test_domain_resolution_falls_back_to_common_tlds(self):
+        import httpx
+
+        from scrape_test.prospects.scan import resolve_domain
+
+        def handler(request):
+            if str(request.url).startswith("https://acmeco.ai"):
+                return httpx.Response(200, text="x" * 900)
+            return httpx.Response(404)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            assert await resolve_domain(client, "AcmeCo") == "acmeco.ai"
+
+    async def test_domain_resolution_gives_up_cleanly(self):
+        import httpx
+
+        from scrape_test.prospects.scan import resolve_domain
+
+        def handler(request):
+            return httpx.Response(404)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            assert await resolve_domain(client, "Nonexistent Widget Co") is None
