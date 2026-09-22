@@ -76,6 +76,63 @@ function renderNews(news) {
   }).join("");
 }
 
+function digestRow(i) {
+  const href = safeUrl(i.url);
+  const tags = (i.tags || []).map((t) => `<span class="chip ${t === "funding" ? "strong" : ""}">${esc(t)}</span>`).join(" ");
+  const when = (i.published || "").slice(0, 16);
+  return `<tr>
+    <td>${i.company ? `<span class="pname">${esc(i.company)}</span>` : "<span class='toolsrc'>—</span>"}
+        ${i.amount ? `<div class="toolsrc">${esc(i.amount)}${i.round_stage ? " · " + esc(i.round_stage) : ""}</div>` : ""}</td>
+    <td>${href ? `<a class="ext" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>` : esc(i.title)}
+        <div class="toolsrc">${esc(i.source_name)}${when ? " · " + esc(when) : ""}</div></td>
+    <td>${tags}</td>
+  </tr>`;
+}
+
+function renderDigest(d) {
+  const items = d.items || [];
+  if (!items.length) {
+    $("digest").innerHTML = `<p class="empty">Nothing stored yet. Press "Refresh feed".</p>`;
+    return;
+  }
+  const funded = (d.funded_companies || []).length;
+  $("digest").innerHTML =
+    `<div class="chips" style="margin-bottom:10px">
+       <span class="chip">${items.length} posts</span>
+       <span class="chip strong">${funded} funded companies named</span>
+       ${Object.entries(d.counts || {}).map(([k, v]) => `<span class="chip">${esc(k)}<b>${v}</b></span>`).join("")}
+     </div>
+     <table class="ptable"><thead><tr>
+       <th>Company</th><th>Announcement</th><th>Tags</th>
+     </tr></thead><tbody>${items.map(digestRow).join("")}</tbody></table>
+     <p class="notice">Company names are parsed from announcement titles. ${d.known_gaps.length}
+     firms render their newsroom in JavaScript and are not covered
+     (${esc(d.known_gaps.slice(0, 4).join(", "))}…).</p>`;
+}
+
+async function loadDigest() {
+  const params = new URLSearchParams({
+    funded_only: $("fundedonly").checked ? "true" : "false",
+    tag: $("digesttag").value,
+  });
+  try {
+    const r = await fetch(`/api/digest?${params}`);
+    const d = await r.json();
+    renderDigest(d);
+    if (d.running) {
+      $("digeststatus").textContent = "refreshing…";
+      setTimeout(loadDigest, 3000);
+    } else {
+      $("digeststatus").textContent = "";
+      $("digestbtn").disabled = false;
+      $("digestbtn").textContent = "Refresh feed";
+    }
+  } catch (err) {
+    $("digest").innerHTML = `<p class="empty">${esc(err.message || err)}</p>`;
+    $("digestbtn").disabled = false;
+  }
+}
+
 function verdictClass(v) {
   return { "prospect": "good", "existing customer": "bad", "no signal": "muted" }[v] || "muted";
 }
@@ -135,6 +192,7 @@ async function pollScan() {
     }
     if (d.error) $("scanprogress").textContent = `failed: ${d.error}`;
     await loadProspects();
+loadDigest();
     if (d.running) { setTimeout(pollScan, 2500); }
     else { $("scanbtn").disabled = false; $("scanbtn").textContent = "Run scan"; }
   } catch {
@@ -561,11 +619,11 @@ $("searchform").addEventListener("submit", async (e) => {
     renderYC(d.yc);
     const cached = d.yc.cached ? ` · jobs ${d.yc.cached.jobs ? "cached" : "fetched"}, site ${d.yc.cached.fingerprint ? "cached" : "fetched"}` : "";
     setStatus(`${d.news.articles.length} articles${cached}`);
-    // Technographics run independently of YC: fall back to the YC website when the
-    // domain box is empty, so a YC company works with no extra typing.
+    // Technographics are their own lookup now: only scan what was typed into the domain
+    // box. Falling back to the YC website quietly re-centred everything on YC, which is
+    // exactly what this pivot moves away from.
     const typed = $("domain").value.trim();
-    const fromYc = d.yc.found && d.yc.company.website ? d.yc.company.website : "";
-    fetchTech(typed || fromYc, d.yc.found ? d.yc.company.name : company);
+    fetchTech(typed, company);
   } catch (err) {
     setStatus(String(err.message || err), true);
   } finally {
@@ -596,6 +654,27 @@ $("scanbtn").addEventListener("click", async () => {
   }
 });
 $("showall").addEventListener("change", loadProspects);
+$("fundedonly").addEventListener("change", loadDigest);
+$("digesttag").addEventListener("change", loadDigest);
+$("digestbtn").addEventListener("click", async () => {
+  const btn = $("digestbtn");
+  btn.disabled = true;
+  btn.textContent = "Refreshing…";
+  $("digeststatus").textContent = "pulling 32 feeds…";
+  try {
+    const r = await fetch("/api/digest/refresh", { method: "POST" });
+    if (!r.ok) {
+      const d = await r.json();
+      throw new Error(d.detail || `API returned ${r.status}`);
+    }
+    setTimeout(loadDigest, 2500);
+  } catch (err) {
+    $("digeststatus").textContent = String(err.message || err);
+    btn.disabled = false;
+    btn.textContent = "Refresh feed";
+  }
+});
 
 loadSources();
 loadProspects();
+loadDigest();

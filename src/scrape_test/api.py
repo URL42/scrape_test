@@ -31,7 +31,10 @@ from .news import SOURCES, get_source
 from .prospects import latest_run, load_prospects, run_scan
 from .prospects.icp import PROSPECT_WEIGHTS
 from .scoring import RULES_VERSION, WEIGHTS, compute_score
+from .scoring.products import lead_product, priority, product_fit
 from .scoring.score import rescore_all, store_score
+from .scoring.timing import timing_score, timing_signals
+from .whatsnew import KNOWN_GAPS, build_digest, load_digest, recently_funded, store_digest
 from .yc.directory import company_dict, refresh_directory, resolve
 from .yc.fingerprint import get_fingerprint, load_fingerprint
 from .yc.jobs import get_jobs, load_jobs, stack_from_jobs, tools_from_jobs
@@ -116,6 +119,11 @@ async def _yc_block(company: str, refresh: bool) -> dict[str, Any]:
         score = compute_score(c, jobs, fp, tools)
         store_score(conn, c["id"], score)
 
+        fits = product_fit(jobs, tools, c)
+        lead, lead_score = lead_product(fits)
+        signals = timing_signals(jobs, open_roles=len(jobs))
+        t_score = timing_score(signals)
+
         return {
             "found": True,
             "company": c,
@@ -129,6 +137,10 @@ async def _yc_block(company: str, refresh: bool) -> dict[str, Any]:
             "yc_news": [i for i in yc_items if i["source"] == "yc_news"],
             "yc_launches": [i for i in yc_items if i["source"] == "yc_launch"],
             "score": score.as_dict(),
+            "products": fits,
+            "lead_product": lead,
+            "timing": {"score": t_score, "signals": signals},
+            "priority": priority(lead_score, t_score),
             "cached": {
                 "jobs": jobs_cached,
                 "fingerprint": fp_cached,
@@ -138,6 +150,51 @@ async def _yc_block(company: str, refresh: bool) -> dict[str, Any]:
 
 
 _scan_task: asyncio.Task[int] | None = None
+_digest_task: asyncio.Task[int] | None = None
+
+
+@app.post("/api/digest/refresh")
+async def refresh_digest(
+    kinds: str = Query("vc,press"),
+    regions: str = Query(""),
+) -> dict[str, Any]:
+    """Pull every curated VC and press feed, classify, store. Takes ~15 seconds."""
+    global _digest_task
+    if _digest_task is not None and not _digest_task.done():
+        raise HTTPException(409, "A digest refresh is already running.")
+
+    kind_tuple = tuple(k.strip() for k in kinds.split(",") if k.strip())
+    region_tuple = tuple(r.strip() for r in regions.split(",") if r.strip())
+
+    async def runner() -> int:
+        items = await build_digest(client(), kinds=kind_tuple, regions=region_tuple)
+        with session() as conn:
+            return store_digest(conn, items)
+
+    _digest_task = asyncio.create_task(runner())
+    return {"started": True, "kinds": kind_tuple, "regions": region_tuple}
+
+
+@app.get("/api/digest")
+async def digest(
+    tag: str = Query(""),
+    funded_only: bool = Query(False),
+    limit: int = Query(120, ge=1, le=500),
+) -> dict[str, Any]:
+    running = _digest_task is not None and not _digest_task.done()
+    with session() as conn:
+        items = load_digest(conn, tag=tag or None, funded_only=funded_only, limit=limit)
+        funded = recently_funded(conn)
+        counts = {
+            r["source_kind"]: r["n"]
+            for r in conn.execute(
+                "SELECT source_kind, COUNT(*) AS n FROM digest_items GROUP BY source_kind"
+            )
+        }
+    return {
+        "items": items, "funded_companies": funded, "counts": counts,
+        "running": running, "known_gaps": list(KNOWN_GAPS),
+    }
 
 
 @app.post("/api/scan")

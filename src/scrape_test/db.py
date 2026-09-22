@@ -138,6 +138,25 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     finished_at     REAL
 );
 
+CREATE TABLE IF NOT EXISTS digest_items (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_name     TEXT NOT NULL,
+    source_kind     TEXT NOT NULL,
+    source_region   TEXT,
+    title           TEXT NOT NULL,
+    url             TEXT NOT NULL UNIQUE,
+    published       TEXT,
+    summary         TEXT,
+    tags            TEXT NOT NULL DEFAULT '[]',
+    company         TEXT,
+    amount          TEXT,
+    round_stage     TEXT,
+    relevance       INTEGER NOT NULL DEFAULT 0,
+    fetched_at      REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_digest_rel ON digest_items(relevance DESC);
+CREATE INDEX IF NOT EXISTS idx_digest_company ON digest_items(company);
+
 CREATE TABLE IF NOT EXISTS meta (
     key             TEXT PRIMARY KEY,
     value           TEXT NOT NULL,

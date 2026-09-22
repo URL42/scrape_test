@@ -25,7 +25,7 @@
     <input id="context" name="context" placeholder="funding, fintech infrastructure" autocomplete="off">
   </div>
   <div class="field grow">
-    <label for="domain">Domain <span class="hint">technographics; blank = use YC website</span></label>
+    <label for="domain">Domain <span class="hint">technographics for any company</span></label>
     <input id="domain" name="domain" placeholder="stripe.com" autocomplete="off">
   </div>
   <div class="field">
@@ -39,6 +39,26 @@
 </form>
 
 <div id="status" class="status" hidden></div>
+
+<section class="panel prospects" id="digestpanel">
+  <h2>What's new <span class="sub">VC announcements &amp; tech press, classified for sales</span></h2>
+  <div class="panel-body">
+    <div class="scanbar">
+      <button type="button" id="digestbtn">Refresh feed</button>
+      <label class="scanopt"><input type="checkbox" id="fundedonly" checked> just-funded only</label>
+      <select id="digesttag" class="scanopt">
+        <option value="">all tags</option>
+        <option value="funding">funding</option>
+        <option value="ai-native">ai-native</option>
+        <option value="ai-sdlc">ai-sdlc</option>
+        <option value="m&amp;a">m&amp;a</option>
+        <option value="leadership">leadership</option>
+      </select>
+      <span id="digeststatus" class="toolsrc"></span>
+    </div>
+    <div id="digest"><p class="empty">Refresh to pull the latest VC and press feeds.</p></div>
+  </div>
+</section>
 
 <section class="panel prospects" id="prospectpanel">
   <h2>Prospect scan <span class="sub">AI-first companies using tooling that isn't Atlassian</span></h2>

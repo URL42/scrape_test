@@ -142,6 +142,57 @@ HTTP if you would rather not leave the browser. Bump `RULES_VERSION` when you ch
 logic so stored scores stay comparable. Every score in the UI expands into a per-signal
 breakdown showing exactly which facts produced which points.
 
+## What's new: VC deal flow and tech press
+
+```bash
+curl -X POST localhost:8000/api/digest/refresh   # or press "Refresh feed"
+```
+
+Pulls **32 curated sources** - 17 US VCs, 9 EMEA VCs, 6 tech press - in about 15 seconds,
+classifies every post (`funding`, `ai-native`, `ai-sdlc`, `m&a`, `launch`, `leadership`)
+and **parses the company out of funding announcements**:
+
+```
+Axiamatic   $54M   Greylock   "Introducing Axiamatic: AI for Enterprise Transformation"
+Cylake      $45M   Greylock   "Introducing Cylake: AI-Native Cybersecurity"
+Preview            Sequoia    "Partnering with Preview: Lights, Inference, Action"
+```
+
+A recent raise is the strongest timing signal there is, and it arrives days after it
+happens. The list is in [`whatsnew/sources.py`](src/scrape_test/whatsnew/sources.py) -
+edit it for your territory. `KNOWN_GAPS` records the firms whose newsrooms are
+JavaScript-only (a16z, Index, Atomico, General Catalyst), so the coverage hole is visible
+rather than silent.
+
+## Scoring: fit, timing, and which product to lead with
+
+One blended number could not answer "who should I call this week, and about what". It is
+now three things.
+
+**Fit, per product** ([`scoring/products.py`](src/scrape_test/scoring/products.py)) -
+because the evidence differs. Linear plus three engineering roles plus sprint language is
+a **Jira** conversation; Notion plus SOC 2 work is **Confluence**; async-first hiring
+across regions is **Loom**; five tools and an ML team is **Rovo**. The lead product falls
+out of the data instead of being guessed.
+
+**Timing** ([`scoring/timing.py`](src/scrape_test/scoring/timing.py)) - the "right now"
+axis, each signal decaying with age:
+
+| Signal | Weight | Half-life |
+|---|---|---|
+| Just funded | 40 | 120d |
+| First-of-role hire (*"1st Product Manager"*) | 25 | 180d |
+| Tool migration (*"migrating from Jira"*) | 25 | 90d |
+| Leadership hire (VP Eng, CTO) | 15 | 120d |
+| Hiring surge, compliance push, going distributed | 10-15 | 90-180d |
+
+A company hiring its first PM is saying out loud that coordination became somebody's job.
+
+**Priority = √(fit × timing)**, multiplicative on purpose. High fit with no trigger is a
+nurture; a strong trigger at a company with no problem is noise. Only both together mean
+call them this week - the same company scores 79 funded two weeks ago and 66 funded eight
+months ago.
+
 ## Prospect scan: finding the companies, not just checking one
 
 Looking companies up one at a time is the wrong shape for prospecting. The scan sweeps a
@@ -315,7 +366,7 @@ web/            index.html + app.js + style.css (vanilla, no build step)
 ## Development
 
 ```bash
-uv run pytest          # 183 tests (unit, async, ATS, tooling precision, LLM, env)
+uv run pytest          # 208 tests (unit, async, ATS, tooling precision, LLM, env)
 uv run ruff check src tests
 uv run mypy
 ```
